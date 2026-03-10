@@ -20,6 +20,10 @@ wheels/
 .installed.cfg
 *.egg
 
+# Claude AI
+.claude/
+*.egg
+
 # Virtual environments
 venv/
 ENV/
