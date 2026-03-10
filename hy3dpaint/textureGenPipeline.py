@@ -19,13 +19,12 @@ import trimesh
 import numpy as np
 from PIL import Image
 from typing import List
-from DifferentiableRenderer.MeshRender import MeshRender
-from utils.simplify_mesh_utils import remesh_mesh
-from utils.multiview_utils import multiviewDiffusionNet
-from utils.pipeline_utils import ViewProcessor
-from utils.image_super_utils import imageSuperNet
-from utils.uvwrap_utils import mesh_uv_wrap
-from DifferentiableRenderer.mesh_utils import convert_obj_to_glb
+from hy3dpaint.DifferentiableRenderer.MeshRender import MeshRender
+from hy3dpaint.utils.simplify_mesh_utils import remesh_mesh
+from hy3dpaint.utils.multiview_utils import multiviewDiffusionNet
+from hy3dpaint.utils.pipeline_utils import ViewProcessor
+from hy3dpaint.utils.image_super_utils import imageSuperNet
+from hy3dpaint.utils.uvwrap_utils import mesh_uv_wrap
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -35,23 +34,29 @@ diffusers_logging.set_verbosity(50)
 
 
 class Hunyuan3DPaintConfig:
-    def __init__(self, max_num_view, resolution):
+    def __init__(self, max_num_view, render_size=512, texture_size=1024, target_count=40000):
         self.device = "cuda"
 
-        self.multiview_cfg_path = "cfgs/hunyuan-paint-pbr.yaml"
-        self.custom_pipeline = "hunyuanpaintpbr"
+        _hy3dpaint_dir = os.path.dirname(__file__)
+        _comfyui_dir = os.path.abspath(os.path.join(_hy3dpaint_dir, "..", "..", ".."))
+        _models_dir = os.path.join(_comfyui_dir, "models", "hunyuan3d")
+
+        self.multiview_cfg_path = os.path.join(_hy3dpaint_dir, "cfgs", "hunyuan-paint-pbr.yaml")
+        self.custom_pipeline = os.path.join(_hy3dpaint_dir, "hunyuanpaintpbr")
         self.multiview_pretrained_path = "tencent/Hunyuan3D-2.1"
-        self.dino_ckpt_path = "facebook/dinov2-giant"
-        self.realesrgan_ckpt_path = "ckpt/RealESRGAN_x4plus.pth"
+        self.hf_cache_dir = _models_dir
+        self.dino_ckpt_path = os.path.join(_models_dir, "facebook", "dinov2-giant")
+        self.realesrgan_ckpt_path = os.path.join(_models_dir, "RealESRGAN_x4plus.pth")
 
         self.raster_mode = "cr"
         self.bake_mode = "back_sample"
-        self.render_size = 1024 * 2
-        self.texture_size = 1024 * 4
+        self.render_size = render_size
+        self.texture_size = texture_size
         self.max_selected_view_num = max_num_view
-        self.resolution = resolution
+        self.resolution = render_size // 4  # 多视图生成尺寸，基于 render_size 按比例计算
         self.bake_exp = 4
         self.merge_method = "fast"
+        self.target_count = target_count
 
         # view selection
         self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]
@@ -90,7 +95,7 @@ class Hunyuan3DPaintPipeline:
         print("Models Loaded.")
 
     @torch.no_grad()
-    def __call__(self, mesh_path=None, image_path=None, output_mesh_path=None, use_remesh=True, save_glb=True):
+    def __call__(self, mesh_path=None, image_path=None, output_mesh_path=None, use_remesh=True):
         """Generate texture for 3D mesh using multiview diffusion"""
         # Ensure image_prompt is a list
         if isinstance(image_path, str):
@@ -106,7 +111,7 @@ class Hunyuan3DPaintPipeline:
         path = os.path.dirname(mesh_path)
         if use_remesh:
             processed_mesh_path = os.path.join(path, "white_mesh_remesh.obj")
-            remesh_mesh(mesh_path, processed_mesh_path)
+            remesh_mesh(mesh_path, processed_mesh_path, target_count=self.config.target_count)
         else:
             processed_mesh_path = mesh_path
 
@@ -184,9 +189,5 @@ class Hunyuan3DPaintPipeline:
             self.render.set_texture_mr(texture_mr)
 
         self.render.save_mesh(output_mesh_path, downsample=True)
-
-        if save_glb:
-            convert_obj_to_glb(output_mesh_path, output_mesh_path.replace(".obj", ".glb"))
-            output_glb_path = output_mesh_path.replace(".obj", ".glb")
 
         return output_mesh_path

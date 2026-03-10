@@ -48,8 +48,16 @@ class Dino_v2(nn.Module):
 
     def __init__(self, dino_v2_path):
         super(Dino_v2, self).__init__()
-        self.dino_processor = AutoImageProcessor.from_pretrained(dino_v2_path)
-        self.dino_v2 = AutoModel.from_pretrained(dino_v2_path)
+        if os.path.isdir(dino_v2_path):
+            self.dino_processor = AutoImageProcessor.from_pretrained(dino_v2_path)
+            self.dino_v2 = AutoModel.from_pretrained(dino_v2_path)
+        else:
+            # Download to dino_v2_path as local dir
+            from huggingface_hub import snapshot_download
+            repo_id = "facebook/dinov2-giant"
+            snapshot_download(repo_id=repo_id, local_dir=dino_v2_path, tqdm_class=None)  # 禁用进度条，避免日志记录ANSI转义码
+            self.dino_processor = AutoImageProcessor.from_pretrained(dino_v2_path)
+            self.dino_v2 = AutoModel.from_pretrained(dino_v2_path)
 
         for param in self.parameters():
             param.requires_grad = False

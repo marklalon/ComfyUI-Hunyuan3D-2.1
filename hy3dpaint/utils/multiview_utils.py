@@ -34,12 +34,34 @@ class multiviewDiffusionNet:
         self.cfg = cfg
         self.mode = self.cfg.model.params.stable_diffusion_config.custom_pipeline[2:]
 
-        model_path = huggingface_hub.snapshot_download(
-            repo_id=config.multiview_pretrained_path,
-            allow_patterns=["hunyuan3d-paintpbr-v2-1/*"],
-        )
-
-        model_path = os.path.join(model_path, "hunyuan3d-paintpbr-v2-1")
+        # 先检查本地路径是否存在，避免每次都访问 HuggingFace
+        if hasattr(config, 'hf_cache_dir') and config.hf_cache_dir:
+            model_path = os.path.join(config.hf_cache_dir, config.multiview_pretrained_path, "hunyuan3d-paintpbr-v2-1")
+        else:
+            # 使用 huggingface_hub 默认缓存位置
+            cache_dir = huggingface_hub.constants.HF_HUB_CACHE
+            # 使用 repo_id 的哈希作为缓存目录名
+            repo_folder = config.multiview_pretrained_path.replace("/", "--")
+            model_path = os.path.join(cache_dir, f"models--{repo_folder}", "snapshots")
+            # 尝试找到最新的快照
+            if os.path.exists(model_path):
+                snapshots = os.listdir(model_path)
+                if snapshots:
+                    model_path = os.path.join(model_path, snapshots[0], "hunyuan3d-paintpbr-v2-1")
+        
+        # 如果本地路径不存在，才下载
+        if not os.path.exists(model_path):
+            print(f"[Hunyuan3D] 模型本地路径不存在，正在从 HuggingFace 下载: {config.multiview_pretrained_path}")
+            _download_kwargs = dict(
+                repo_id=config.multiview_pretrained_path,
+                allow_patterns=["hunyuan3d-paintpbr-v2-1/*"],
+            )
+            if hasattr(config, 'hf_cache_dir') and config.hf_cache_dir:
+                _download_kwargs["local_dir"] = os.path.join(config.hf_cache_dir, config.multiview_pretrained_path)
+            downloaded_path = huggingface_hub.snapshot_download(**_download_kwargs, tqdm_class=None)
+            model_path = os.path.join(downloaded_path, "hunyuan3d-paintpbr-v2-1")
+        else:
+            print(f"[Hunyuan3D] 使用本地模型: {model_path}")
         pipeline = DiffusionPipeline.from_pretrained(
             model_path,
             custom_pipeline=custom_pipeline, 

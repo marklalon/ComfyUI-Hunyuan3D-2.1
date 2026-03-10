@@ -16,8 +16,8 @@ import trimesh
 import pymeshlab
 
 
-def remesh_mesh(mesh_path, remesh_path):
-    mesh = mesh_simplify_trimesh(mesh_path, remesh_path)
+def remesh_mesh(mesh_path, remesh_path, target_count=40000):
+    mesh = mesh_simplify_trimesh(mesh_path, remesh_path, target_count=target_count)
 
 
 def mesh_simplify_trimesh(inputpath, outputpath, target_count=40000):
@@ -33,5 +33,5 @@ def mesh_simplify_trimesh(inputpath, outputpath, target_count=40000):
     face_num = courent.faces.shape[0]
 
     if face_num > target_count:
-        courent = courent.simplify_quadric_decimation(target_count)
+        courent = courent.simplify_quadric_decimation(face_count=target_count)
     courent.export(outputpath)

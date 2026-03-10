@@ -31,7 +31,7 @@ from .camera_utils import (
 try:
     from .mesh_utils import load_mesh, save_mesh
 except:
-    print("Bpy IO CAN NOT BE Imported!!!")
+    print("Mesh IO CAN NOT BE Imported!!!")
 
 try:
     from .mesh_inpaint_processor import meshVerticeInpaint  # , meshVerticeColor
