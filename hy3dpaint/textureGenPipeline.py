@@ -34,7 +34,7 @@ diffusers_logging.set_verbosity(50)
 
 
 class Hunyuan3DPaintConfig:
-    def __init__(self, max_num_view, render_size=512, texture_size=1024, target_count=40000):
+    def __init__(self, texture_size=2048, face_count=40000):
         self.device = "cuda"
 
         _hy3dpaint_dir = os.path.dirname(__file__)
@@ -50,13 +50,13 @@ class Hunyuan3DPaintConfig:
 
         self.raster_mode = "cr"
         self.bake_mode = "back_sample"
-        self.render_size = render_size
+        self.render_size = 2048
         self.texture_size = texture_size
-        self.max_selected_view_num = max_num_view
-        self.resolution = render_size // 4  # 多视图生成尺寸，基于 render_size 按比例计算
+        self.max_selected_view_num = 6
+        self.resolution = 512
         self.bake_exp = 4
         self.merge_method = "fast"
-        self.target_count = target_count
+        self.target_count = face_count
 
         # view selection
         self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]
@@ -190,4 +190,8 @@ class Hunyuan3DPaintPipeline:
 
         self.render.save_mesh(output_mesh_path, downsample=True)
 
-        return output_mesh_path
+        # 获取纹理图像 (numpy array, [H, W, 3], range [0, 1])
+        albedo_texture = self.render.get_texture()
+        metallic_texture, roughness_texture = self.render.get_texture_mr()
+
+        return output_mesh_path, albedo_texture, metallic_texture, roughness_texture
