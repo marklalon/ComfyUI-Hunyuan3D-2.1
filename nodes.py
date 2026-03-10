@@ -2,8 +2,15 @@ import os
 import tempfile
 import torch
 import numpy as np
+from PIL import Image
 import folder_paths
-from comfy_api.latest._util import MESH
+
+
+
+def tensor_to_pil(image_tensor):
+    """将 ComfyUI IMAGE tensor [B, H, W, C] (float 0-1) 转为 PIL Image"""
+    img_np = (image_tensor[0].cpu().numpy() * 255).astype(np.uint8)
+    return Image.fromarray(img_np)
 
 
 class LoadHunyuan3DModel:
@@ -57,20 +64,26 @@ class Hunyuan3DShapeGeneration:
             }
         }
 
-    RETURN_TYPES = ("MESH",)
-    RETURN_NAMES = ("mesh_untextured",)
+    RETURN_TYPES = ("STRING", "TRIMESH")
+    RETURN_NAMES = ("mesh_path", "mesh_trimesh",)
     FUNCTION = "generate"
     CATEGORY = "Hunyuan3D-2.1"
+    OUTPUT_NODE = True
 
     def generate(self, model, image):
+        import trimesh
         shape_pipeline = model
-        trimesh_mesh = shape_pipeline(image=image)[0]
+        pil_image = tensor_to_pil(image)
+        trimesh_mesh = shape_pipeline(image=pil_image)[0]
 
-        vertices = torch.from_numpy(np.array(trimesh_mesh.vertices, dtype=np.float32)).unsqueeze(0)
-        faces = torch.from_numpy(np.array(trimesh_mesh.faces, dtype=np.int64)).unsqueeze(0)
-        mesh_untextured = MESH(vertices, faces)
+        # 保存 mesh 到 output/hunyuan3d 目录
+        output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output", "hunyuan3d")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        mesh_path = os.path.join(output_dir, "input_mesh.obj")
+        trimesh_mesh.export(mesh_path)
 
-        return (mesh_untextured,)
+        return (mesh_path, trimesh_mesh)
 
 
 class Hunyuan3DTexureSynthsis:
@@ -79,7 +92,7 @@ class Hunyuan3DTexureSynthsis:
         return {
             "required": {
                 "image": ("IMAGE",),
-                "mesh_untextured": ("MESH",),
+                "mesh": ("TRIMESH",),
                 "texture_size": ("INT", {"default": 2048, "min": 512, "max": 4096}),
                 "face_count": ("INT", {"default": 40000, "min": 1000, "max": 500000}),
                 "simplify_mesh": (["enable", "disable"], {"default": "enable"}),
@@ -91,22 +104,14 @@ class Hunyuan3DTexureSynthsis:
     FUNCTION = "generate"
     CATEGORY = "Hunyuan3D-2.1"
 
-    def generate(self, image, mesh_untextured, texture_size, face_count, simplify_mesh):
+    def generate(self, image, mesh, texture_size, face_count, simplify_mesh):
         import trimesh
         from hy3dpaint.textureGenPipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintConfig
 
-        verts = mesh_untextured.vertices[0].cpu().numpy()
-        fcs = mesh_untextured.faces[0].cpu().numpy()
-        mesh = trimesh.Trimesh(vertices=verts, faces=fcs)
-
-        output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output", "hunyuan3d")
-        os.makedirs(output_dir, exist_ok=True)
-        mesh_path = os.path.join(output_dir, "input_mesh.obj")
-        mesh.export(mesh_path)
-
         paint_pipeline = Hunyuan3DPaintPipeline(Hunyuan3DPaintConfig(texture_size=texture_size, face_count=face_count))
         use_remesh = (simplify_mesh == "enable")
-        mesh_textured_path, albedo_texture, metallic_texture, roughness_texture = paint_pipeline(mesh_path, image_path=image, use_remesh=use_remesh)
+        pil_image = tensor_to_pil(image)
+        mesh_textured_path, albedo_texture, metallic_texture, roughness_texture = paint_pipeline(mesh=mesh, image_path=pil_image, use_remesh=use_remesh)
 
         # 转换 numpy array 为 ComfyUI IMAGE 格式 (torch tensor, [B, H, W, C])
         # albedo_texture, metallic_texture, roughness_texture 已经是 numpy array [H, W, 3], range [0, 1]
@@ -131,10 +136,11 @@ class Load3DMesh:
             }
         }
 
-    RETURN_TYPES = ("MESH",)
-    RETURN_NAMES = ("mesh",)
+    RETURN_TYPES = ("STRING", "TRIMESH")
+    RETURN_NAMES = ("mesh_path", "mesh",)
     FUNCTION = "load_mesh"
     CATEGORY = "Hunyuan3D-2.1"
+    OUTPUT_NODE = True
 
     def load_mesh(self, mesh_path):
         if not os.path.isfile(mesh_path):
@@ -146,10 +152,8 @@ class Load3DMesh:
 
         import trimesh
         mesh = trimesh.load(mesh_path, force="mesh", merge_primitives=True)
-        vertices = torch.from_numpy(np.array(mesh.vertices, dtype=np.float32)).unsqueeze(0)
-        faces = torch.from_numpy(np.array(mesh.faces, dtype=np.int64)).unsqueeze(0)
 
-        return (MESH(vertices, faces),)
+        return (mesh_path, mesh)
 
 
 class ConvertToGLB:
@@ -158,11 +162,13 @@ class ConvertToGLB:
         return {
             "required": {
                 "mesh": ("TRIMESH",),
+                "filename_prefix": ("STRING", {"default": "mesh/hunyuan3d"}),
+            },
+            "optional": {
                 "albedo_texture": ("IMAGE",),
                 "metallic_texture": ("IMAGE",),
                 "roughness_texture": ("IMAGE",),
-                "filename_prefix": ("STRING", {"default": "mesh/hunyuan3d"}),
-            },
+            }
         }
 
     RETURN_TYPES = ("STRING",)
@@ -171,8 +177,7 @@ class ConvertToGLB:
     CATEGORY = "Hunyuan3D-2.1"
     OUTPUT_NODE = True
 
-    def convert(self, mesh, albedo_texture, metallic_texture, roughness_texture, filename_prefix):
-        from PIL import Image
+    def convert(self, mesh, filename_prefix, albedo_texture=None, metallic_texture=None, roughness_texture=None):
         from hy3dpaint.convert_utils import create_glb_with_pbr_materials
         
         # 获取输出目录
@@ -184,22 +189,22 @@ class ConvertToGLB:
         glb_filename = f"{filename}_{counter:05}.glb"
         glb_path = os.path.join(full_output_folder, glb_filename)
         
-        # 转换纹理为 PIL Image
-        albedo_np = (albedo_texture[0].cpu().numpy() * 255).astype(np.uint8)
-        albedo_img = Image.fromarray(albedo_np)
+        # 转换纹理为 PIL Image（仅处理非空的纹理）
+        textures_dict = {}
         
-        metallic_np = (metallic_texture[0].cpu().numpy() * 255).astype(np.uint8)
-        metallic_img = Image.fromarray(metallic_np)
+        if albedo_texture is not None:
+            albedo_np = (albedo_texture[0].cpu().numpy() * 255).astype(np.uint8)
+            textures_dict['albedo'] = Image.fromarray(albedo_np)
         
-        roughness_np = (roughness_texture[0].cpu().numpy() * 255).astype(np.uint8)
-        roughness_img = Image.fromarray(roughness_np)
+        if metallic_texture is not None:
+            metallic_np = (metallic_texture[0].cpu().numpy() * 255).astype(np.uint8)
+            textures_dict['metallic'] = Image.fromarray(metallic_np)
+        
+        if roughness_texture is not None:
+            roughness_np = (roughness_texture[0].cpu().numpy() * 255).astype(np.uint8)
+            textures_dict['roughness'] = Image.fromarray(roughness_np)
         
         # 调用 create_glb_with_pbr_materials
-        textures_dict = {
-            'albedo': albedo_img,
-            'metallic': metallic_img,
-            'roughness': roughness_img,
-        }
         create_glb_with_pbr_materials(mesh, textures_dict, glb_path)
         
         return (glb_path,)

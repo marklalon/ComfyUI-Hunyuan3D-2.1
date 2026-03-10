@@ -95,8 +95,16 @@ class Hunyuan3DPaintPipeline:
         print("Models Loaded.")
 
     @torch.no_grad()
-    def __call__(self, mesh_path=None, image_path=None, output_mesh_path=None, use_remesh=True):
-        """Generate texture for 3D mesh using multiview diffusion"""
+    def __call__(self, mesh=None, mesh_path=None, image_path=None, output_mesh_path=None, use_remesh=True):
+        """Generate texture for 3D mesh using multiview diffusion
+        
+        Args:
+            mesh: trimesh.Trimesh object (optional, mutually exclusive with mesh_path)
+            mesh_path: path to mesh file (optional, mutually exclusive with mesh)
+            image_path: image path or PIL Image
+            output_mesh_path: output path for textured mesh
+            use_remesh: whether to remesh the mesh
+        """
         # Ensure image_prompt is a list
         if isinstance(image_path, str):
             image_prompt = Image.open(image_path)
@@ -107,20 +115,36 @@ class Hunyuan3DPaintPipeline:
         else:
             image_prompt = image_path
 
-        # Process mesh
-        path = os.path.dirname(mesh_path)
-        if use_remesh:
-            processed_mesh_path = os.path.join(path, "white_mesh_remesh.obj")
-            remesh_mesh(mesh_path, processed_mesh_path, target_count=self.config.target_count)
+        # Determine path for intermediate files
+        if mesh is not None:
+            # trimesh object provided directly
+            import tempfile
+            path = tempfile.gettempdir()
         else:
-            processed_mesh_path = mesh_path
+            path = os.path.dirname(mesh_path)
+            
+        # Process mesh
+        if use_remesh:
+            if mesh is not None:
+                # Save trimesh to temp file for remesh
+                temp_mesh_path = os.path.join(path, "input_mesh_for_remesh.obj")
+                mesh.export(temp_mesh_path)
+                processed_mesh_path = os.path.join(path, "white_mesh_remesh.obj")
+                remesh_mesh(temp_mesh_path, processed_mesh_path, target_count=self.config.target_count)
+                mesh = trimesh.load(processed_mesh_path)
+            else:
+                processed_mesh_path = os.path.join(path, "white_mesh_remesh.obj")
+                remesh_mesh(mesh_path, processed_mesh_path, target_count=self.config.target_count)
+                mesh = trimesh.load(processed_mesh_path)
+        else:
+            if mesh is None:
+                mesh = trimesh.load(mesh_path)
 
         # Output path
         if output_mesh_path is None:
             output_mesh_path = os.path.join(path, f"textured_mesh.obj")
 
         # Load mesh
-        mesh = trimesh.load(processed_mesh_path)
         mesh = mesh_uv_wrap(mesh)
         self.render.load_mesh(mesh=mesh)
 
