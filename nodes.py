@@ -82,6 +82,7 @@ class Hunyuan3DTexureSynthsis:
                 "mesh_untextured": ("MESH",),
                 "texture_size": ("INT", {"default": 2048, "min": 512, "max": 4096}),
                 "face_count": ("INT", {"default": 40000, "min": 1000, "max": 500000}),
+                "simplify_mesh": (["enable", "disable"], {"default": "enable"}),
             }
         }
 
@@ -90,7 +91,7 @@ class Hunyuan3DTexureSynthsis:
     FUNCTION = "generate"
     CATEGORY = "Hunyuan3D-2.1"
 
-    def generate(self, image, mesh_untextured, texture_size, face_count):
+    def generate(self, image, mesh_untextured, texture_size, face_count, simplify_mesh):
         import trimesh
         from hy3dpaint.textureGenPipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintConfig
 
@@ -104,7 +105,8 @@ class Hunyuan3DTexureSynthsis:
         mesh.export(mesh_path)
 
         paint_pipeline = Hunyuan3DPaintPipeline(Hunyuan3DPaintConfig(texture_size=texture_size, face_count=face_count))
-        mesh_textured_path, albedo_texture, metallic_texture, roughness_texture = paint_pipeline(mesh_path, image_path=image)
+        use_remesh = (simplify_mesh == "enable")
+        mesh_textured_path, albedo_texture, metallic_texture, roughness_texture = paint_pipeline(mesh_path, image_path=image, use_remesh=use_remesh)
 
         # 转换 numpy array 为 ComfyUI IMAGE 格式 (torch tensor, [B, H, W, C])
         # albedo_texture, metallic_texture, roughness_texture 已经是 numpy array [H, W, 3], range [0, 1]
@@ -161,10 +163,6 @@ class ConvertToGLB:
                 "roughness_texture": ("IMAGE",),
                 "filename_prefix": ("STRING", {"default": "mesh/hunyuan3d"}),
             },
-            "hidden": {
-                "prompt": "PROMPT",
-                "extra_pnginfo": "EXTRA_PNGINFO",
-            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -173,7 +171,7 @@ class ConvertToGLB:
     CATEGORY = "Hunyuan3D-2.1"
     OUTPUT_NODE = True
 
-    def convert(self, mesh, albedo_texture, metallic_texture, roughness_texture, filename_prefix, prompt=None, extra_pnginfo=None):
+    def convert(self, mesh, albedo_texture, metallic_texture, roughness_texture, filename_prefix):
         from PIL import Image
         from hy3dpaint.convert_utils import create_glb_with_pbr_materials
         
@@ -183,10 +181,10 @@ class ConvertToGLB:
         )
         
         # 生成 GLB 文件名
-        glb_filename = f"{filename}_{counter:05}_.glb"
+        glb_filename = f"{filename}_{counter:05}.glb"
         glb_path = os.path.join(full_output_folder, glb_filename)
         
-        # 转换纹理为 PIL Image (直接传递，无需临时文件)
+        # 转换纹理为 PIL Image
         albedo_np = (albedo_texture[0].cpu().numpy() * 255).astype(np.uint8)
         albedo_img = Image.fromarray(albedo_np)
         
@@ -196,7 +194,7 @@ class ConvertToGLB:
         roughness_np = (roughness_texture[0].cpu().numpy() * 255).astype(np.uint8)
         roughness_img = Image.fromarray(roughness_np)
         
-        # 直接调用 create_glb_with_pbr_materials，传递 trimesh 对象和 PIL Image
+        # 调用 create_glb_with_pbr_materials
         textures_dict = {
             'albedo': albedo_img,
             'metallic': metallic_img,
@@ -204,16 +202,4 @@ class ConvertToGLB:
         }
         create_glb_with_pbr_materials(mesh, textures_dict, glb_path)
         
-        # 构建返回结果（支持交互式 3D 预览）
-        results = [{
-            "filename": glb_filename,
-            "subfolder": subfolder,
-            "type": "output"
-        }]
-        
-        return {
-            "ui": {
-                "3d": results
-            },
-            "result": (glb_path,)
-        }
+        return (glb_path,)

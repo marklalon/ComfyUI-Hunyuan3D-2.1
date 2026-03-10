@@ -158,7 +158,10 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
             for primitive in gltf.meshes[0].primitives:
                 primitive.material = 0
 
-        # 9. 保存最终GLB
+        # 9. 将data URI图像转为binary buffer view（GLB二进制块）
+        gltf.convert_images(pygltflib.ImageFormat.BUFFERVIEW)
+
+        # 10. 保存最终GLB
         gltf.save(output_path)
         print(f"PBR GLB文件已保存: {output_path}")
         
