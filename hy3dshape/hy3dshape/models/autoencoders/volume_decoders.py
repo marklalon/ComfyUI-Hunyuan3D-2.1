@@ -148,6 +148,7 @@ class VanillaVolumeDecoder:
         num_chunks: int = 10000,
         octree_resolution: int = None,
         enable_pbar: bool = True,
+        volume_decode_callback: Callable = None,
         **kwargs,
     ):
         device = latents.device
@@ -169,12 +170,21 @@ class VanillaVolumeDecoder:
 
         # 2. latents to 3d volume
         batch_logits = []
-        for start in tqdm(range(0, xyz_samples.shape[0], num_chunks), desc=f"Volume Decoding",
-                          disable=not enable_pbar):
+        total_points = xyz_samples.shape[0]
+        total_chunks = (total_points + num_chunks - 1) // num_chunks
+        for chunk_idx, start in enumerate(range(0, total_points, num_chunks)):
             chunk_queries = xyz_samples[start: start + num_chunks, :]
             chunk_queries = repeat(chunk_queries, "p c -> b p c", b=batch_size)
             logits = geo_decoder(queries=chunk_queries, latents=latents)
             batch_logits.append(logits)
+            
+            # Report progress via callback
+            if volume_decode_callback is not None:
+                volume_decode_callback(chunk_idx + 1, total_chunks)
+            
+            # Also show tqdm if enabled
+            #if enable_pbar:
+            #    tqdm.write(f"Volume Decoding: {chunk_idx + 1}/{total_chunks}")
 
         grid_logits = torch.cat(batch_logits, dim=1)
         grid_logits = grid_logits.view((batch_size, *grid_size)).float()
@@ -194,6 +204,7 @@ class HierarchicalVolumeDecoding:
         octree_resolution: int = None,
         min_resolution: int = 63,
         enable_pbar: bool = True,
+        volume_decode_callback: Callable = None,
         **kwargs,
     ):
         device = latents.device
@@ -230,12 +241,21 @@ class HierarchicalVolumeDecoding:
         # 2. latents to 3d volume
         batch_logits = []
         batch_size = latents.shape[0]
-        for start in tqdm(range(0, xyz_samples.shape[0], num_chunks),
-                          desc=f"Hierarchical Volume Decoding [r{resolutions[0] + 1}]"):
+        total_points = xyz_samples.shape[0]
+        total_chunks = (total_points + num_chunks - 1) // num_chunks
+        chunk_idx = 0
+        for start in range(0, total_points, num_chunks):
             queries = xyz_samples[start: start + num_chunks, :]
             batch_queries = repeat(queries, "p c -> b p c", b=batch_size)
             logits = geo_decoder(queries=batch_queries, latents=latents)
             batch_logits.append(logits)
+            
+            # Report progress
+            chunk_idx += 1
+            if volume_decode_callback is not None:
+                volume_decode_callback(chunk_idx, total_chunks, f"r{resolutions[0] + 1}")
+            #if enable_pbar:
+            #    tqdm.write(f"Hierarchical Volume Decoding [r{resolutions[0] + 1}]: {chunk_idx}/{total_chunks}")
 
         grid_logits = torch.cat(batch_logits, dim=1).view((batch_size, grid_size[0], grid_size[1], grid_size[2]))
 
@@ -263,12 +283,22 @@ class HierarchicalVolumeDecoding:
             next_points = (next_points * torch.tensor(resolution, dtype=next_points.dtype, device=device) +
                            torch.tensor(bbox_min, dtype=next_points.dtype, device=device))
             batch_logits = []
-            for start in tqdm(range(0, next_points.shape[0], num_chunks),
-                              desc=f"Hierarchical Volume Decoding [r{octree_depth_now + 1}]"):
+            total_points = next_points.shape[0]
+            total_chunks = (total_points + num_chunks - 1) // num_chunks
+            chunk_idx = 0
+            for start in range(0, total_points, num_chunks):
                 queries = next_points[start: start + num_chunks, :]
                 batch_queries = repeat(queries, "p c -> b p c", b=batch_size)
                 logits = geo_decoder(queries=batch_queries.to(latents.dtype), latents=latents)
                 batch_logits.append(logits)
+                
+                # Report progress
+                chunk_idx += 1
+                if volume_decode_callback is not None:
+                    volume_decode_callback(chunk_idx, total_chunks, f"r{octree_depth_now + 1}")
+                #if enable_pbar:
+                #    tqdm.write(f"Hierarchical Volume Decoding [r{octree_depth_now + 1}]: {chunk_idx}/{total_chunks}")
+                    
             grid_logits = torch.cat(batch_logits, dim=1)
             next_logits[nidx] = grid_logits[0, ..., 0]
             grid_logits = next_logits.unsqueeze(0)
@@ -299,6 +329,7 @@ class FlashVDMVolumeDecoding:
         min_resolution: int = 63,
         mini_grid_num: int = 4,
         enable_pbar: bool = True,
+        volume_decode_callback: Callable = None,
         **kwargs,
     ):
         processor = self.processor
@@ -354,14 +385,23 @@ class FlashVDMVolumeDecoding:
         )
         batch_logits = []
         num_batchs = max(num_chunks // xyz_samples.shape[1], 1)
-        for start in tqdm(range(0, xyz_samples.shape[0], num_batchs),
-                          desc=f"FlashVDM Volume Decoding", disable=not enable_pbar):
+        total_batches = (xyz_samples.shape[0] + num_batchs - 1) // num_batchs
+        batch_idx = 0
+        for start in range(0, xyz_samples.shape[0], num_batchs):
             queries = xyz_samples[start: start + num_batchs, :]
             batch = queries.shape[0]
             batch_latents = repeat(latents.squeeze(0), "p c -> b p c", b=batch)
             processor.topk = True
             logits = geo_decoder(queries=queries, latents=batch_latents)
             batch_logits.append(logits)
+            
+            # Report progress
+            batch_idx += 1
+            if volume_decode_callback is not None:
+                volume_decode_callback(batch_idx, total_batches, "initial")
+            #if enable_pbar:
+            #    tqdm.write(f"FlashVDM Volume Decoding: {batch_idx}/{total_batches}")
+                
         grid_logits = torch.cat(batch_logits, dim=0).reshape(
             mini_grid_num, mini_grid_num, mini_grid_num,
             mini_grid_size, mini_grid_size,

@@ -88,24 +88,32 @@ class Hunyuan3DShapeGeneration:
         # 创建进度回调函数用于 diffusion sampling
         total_steps = 50  # 默认步数
         def diffusion_callback(step_idx, timestep, latents):
-            # 扩散采样进度: 10% - 70%
-            progress = int(10 + (step_idx / total_steps) * 60)
+            # 扩散采样进度: 10% - 50%
+            progress = int(10 + (step_idx / total_steps) * 40)
             send_progress(f"Diffusion sampling step {step_idx + 1}/{total_steps}", progress)
+        
+        # 创建进度回调函数用于 volume decoding
+        def volume_decode_callback(chunk_idx, total_chunks, resolution=""):
+            # 体积解码进度: 50% - 90%
+            progress = int(50 + (chunk_idx / total_chunks) * 40)
+            res_str = f" [{resolution}]" if resolution else ""
+            send_progress(f"Volume decoding{res_str}: {chunk_idx}/{total_chunks}", progress)
         
         send_progress("Running shape generation model...", 10)
         trimesh_mesh = shape_pipeline(
             image=pil_image, 
             callback=diffusion_callback,
-            callback_steps=1
+            callback_steps=1,
+            volume_decode_callback=volume_decode_callback
         )[0]
 
-        # 保存 mesh 到 ComfyUI output/hunyuan3d 目录
-        send_progress("Preparing to save mesh...", 80)
-        output_dir = os.path.join(folder_paths.get_output_directory(), "hunyuan3d")
+        # 保存 mesh 到 ComfyUI output/hunyuan3d_temp 目录
+        send_progress("Preparing to save mesh...", 95)
+        output_dir = os.path.join(folder_paths.get_output_directory(), "hunyuan3d_temp")
         os.makedirs(output_dir, exist_ok=True)
 
         mesh_path = os.path.join(output_dir, "input_mesh.obj")
-        send_progress("Saving generated mesh...", 90)
+        send_progress("Saving generated mesh...", 98)
         trimesh_mesh.export(mesh_path)
         
         send_progress("Shape generation complete!", 100)

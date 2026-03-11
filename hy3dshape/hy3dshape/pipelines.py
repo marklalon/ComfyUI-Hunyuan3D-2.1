@@ -573,10 +573,13 @@ class Hunyuan3DDiTPipeline:
         mc_algo=None,
         output_type: Optional[str] = "trimesh",
         enable_pbar=True,
+        callback=None,
+        callback_steps=None,
+        volume_decode_callback=None,
         **kwargs,
     ) -> List[List[trimesh.Trimesh]]:
-        callback = kwargs.pop("callback", None)
-        callback_steps = kwargs.pop("callback_steps", None)
+        callback = kwargs.pop("callback", None) if callback is None else callback
+        callback_steps = kwargs.pop("callback_steps", None) if callback_steps is None else callback_steps
 
         self.set_surface_extractor(mc_algo)
 
@@ -653,6 +656,8 @@ class Hunyuan3DDiTPipeline:
             latents,
             output_type,
             box_v, mc_level, num_chunks, octree_resolution, mc_algo,
+            enable_pbar=enable_pbar,
+            volume_decode_callback=volume_decode_callback,
         )
 
     def _export(
@@ -664,7 +669,8 @@ class Hunyuan3DDiTPipeline:
         num_chunks=20000,
         octree_resolution=256,
         mc_algo='mc',
-        enable_pbar=True
+        enable_pbar=True,
+        volume_decode_callback=None,
     ):
         if not output_type == "latent":
             latents = 1. / self.vae.scale_factor * latents
@@ -677,6 +683,7 @@ class Hunyuan3DDiTPipeline:
                 octree_resolution=octree_resolution,
                 mc_algo=mc_algo,
                 enable_pbar=enable_pbar,
+                volume_decode_callback=volume_decode_callback,
             )
         else:
             outputs = latents
@@ -707,10 +714,13 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
         output_type: Optional[str] = "trimesh",
         enable_pbar=True,
         mask = None,
+        callback=None,
+        callback_steps=None,
+        volume_decode_callback=None,
         **kwargs,
     ) -> List[List[trimesh.Trimesh]]:
-        callback = kwargs.pop("callback", None)
-        callback_steps = kwargs.pop("callback_steps", None)
+        callback = kwargs.pop("callback", None) if callback is None else callback
+        callback_steps = kwargs.pop("callback_steps", None) if callback_steps is None else callback_steps
 
         self.set_surface_extractor(mc_algo)
 
@@ -780,4 +790,5 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
             output_type,
             box_v, mc_level, num_chunks, octree_resolution, mc_algo,
             enable_pbar=enable_pbar,
+            volume_decode_callback=volume_decode_callback,
         )
