@@ -615,9 +615,9 @@ class MeshRender:
             scale_factor: Scaling factor for mesh normalization
             auto_center: Whether to automatically center the mesh
         """
-        vtx_pos, pos_idx, vtx_uv, uv_idx, texture_data = load_mesh(mesh)
+        vtx_pos, pos_idx, vtx_uv, uv_idx, vtx_normal, texture_data = load_mesh(mesh)
         self.set_mesh(
-            vtx_pos, pos_idx, vtx_uv=vtx_uv, uv_idx=uv_idx, scale_factor=scale_factor, auto_center=auto_center
+            vtx_pos, pos_idx, vtx_uv=vtx_uv, uv_idx=uv_idx, vtx_normal=vtx_normal, scale_factor=scale_factor, auto_center=auto_center
         )
         if texture_data is not None:
             self.set_texture(texture_data)
@@ -631,7 +631,7 @@ class MeshRender:
             downsample: Whether to downsample textures by half
         """
 
-        vtx_pos, pos_idx, vtx_uv, uv_idx = self.get_mesh(normalize=False)
+        vtx_pos, pos_idx, vtx_uv, uv_idx, vtx_normal = self.get_mesh(normalize=False)
         texture_data = self.get_texture()
         texture_metallic, texture_roughness = self.get_texture_mr()
         texture_normal = self.get_texture_normal()
@@ -660,9 +660,10 @@ class MeshRender:
             metallic=texture_metallic,
             roughness=texture_roughness,
             normal=texture_normal,
+            vtx_normal=vtx_normal,
         )
 
-    def set_mesh(self, vtx_pos, pos_idx, vtx_uv=None, uv_idx=None, scale_factor=1.15, auto_center=True):
+    def set_mesh(self, vtx_pos, pos_idx, vtx_uv=None, uv_idx=None, vtx_normal=None, scale_factor=1.15, auto_center=True):
         """
         Set mesh geometry data and perform coordinate transformations.
         
@@ -670,7 +671,8 @@ class MeshRender:
             vtx_pos: Vertex positions [N, 3]
             pos_idx: Triangle vertex indices [F, 3]
             vtx_uv: UV coordinates [N, 2], optional
-            uv_idx: Triangle UV indices [F, 3], optional  
+            uv_idx: Triangle UV indices [F, 3], optional
+            vtx_normal: Vertex normals [N, 3], optional
             scale_factor: Scaling factor for mesh normalization
             auto_center: Whether to automatically center and scale the mesh
         """
@@ -684,6 +686,14 @@ class MeshRender:
         # 确保索引类型为int32
         if self.pos_idx.dtype == torch.int64:
             self.pos_idx = self.pos_idx.to(torch.int32)
+
+        # Handle vertex normals
+        if vtx_normal is not None:
+            self.vtx_normal = torch.from_numpy(vtx_normal).to(self.device)
+            if self.vtx_normal.dtype == torch.float64:
+                self.vtx_normal = self.vtx_normal.to(torch.float32)
+        else:
+            self.vtx_normal = None
 
         if (vtx_uv is not None) and (uv_idx is not None):
             self.vtx_uv = torch.from_numpy(vtx_uv).to(self.device)
@@ -700,8 +710,17 @@ class MeshRender:
             self.vtx_uv = None
             self.uv_idx = None
 
+        # Apply coordinate transformation to vertices
         self.vtx_pos[:, [0, 1]] = -self.vtx_pos[:, [0, 1]]
         self.vtx_pos[:, [1, 2]] = self.vtx_pos[:, [2, 1]]
+        
+        # Apply same transformation to normals (if present)
+        if self.vtx_normal is not None:
+            self.vtx_normal[:, [0, 1]] = -self.vtx_normal[:, [0, 1]]
+            self.vtx_normal[:, [1, 2]] = self.vtx_normal[:, [2, 1]]
+            # Re-normalize after transformation
+            self.vtx_normal = self.vtx_normal / torch.norm(self.vtx_normal, dim=1, keepdim=True)
+        
         if (vtx_uv is not None) and (uv_idx is not None):
             self.vtx_uv[:, 1] = 1.0 - self.vtx_uv[:, 1]
             pass
@@ -824,12 +843,15 @@ class MeshRender:
             normalize: Whether to keep normalized coordinates (True) or restore original scale (False)
             
         Returns:
-            Tuple of (vertex_positions, face_indices, uv_coordinates, uv_indices)
+            Tuple of (vertex_positions, face_indices, uv_coordinates, uv_indices, vertex_normals)
         """
         vtx_pos = self.vtx_pos.cpu().numpy()
         pos_idx = self.pos_idx.cpu().numpy()
         vtx_uv = self.vtx_uv.cpu().numpy()
         uv_idx = self.uv_idx.cpu().numpy()
+        
+        # Get vertex normals if available
+        vtx_normal = self.vtx_normal.cpu().numpy() if self.vtx_normal is not None else None
 
         # 坐标变换的逆变换
         if not normalize:
@@ -837,9 +859,17 @@ class MeshRender:
             vtx_pos = vtx_pos + self.mesh_normalize_scale_center
         vtx_pos[:, [1, 2]] = vtx_pos[:, [2, 1]]
         vtx_pos[:, [0, 1]] = -vtx_pos[:, [0, 1]]
+        
+        # Apply inverse transformation to normals
+        if vtx_normal is not None:
+            vtx_normal[:, [1, 2]] = vtx_normal[:, [2, 1]]
+            vtx_normal[:, [0, 1]] = -vtx_normal[:, [0, 1]]
+            # Re-normalize after transformation
+            norms = np.linalg.norm(vtx_normal, axis=1, keepdims=True)
+            vtx_normal = vtx_normal / norms
 
         vtx_uv[:, 1] = 1.0 - vtx_uv[:, 1]
-        return vtx_pos, pos_idx, vtx_uv, uv_idx
+        return vtx_pos, pos_idx, vtx_uv, uv_idx, vtx_normal
 
     def get_texture(self):
         """
@@ -1404,7 +1434,7 @@ class MeshRender:
             mask = (mask.squeeze(-1).cpu().numpy() * 255).astype(np.uint8)
 
         if vertex_inpaint:
-            vtx_pos, pos_idx, vtx_uv, uv_idx = self.get_mesh()
+            vtx_pos, pos_idx, vtx_uv, uv_idx, _ = self.get_mesh()
             texture_np, mask = meshVerticeInpaint(texture_np, mask, vtx_pos, vtx_uv, pos_idx, uv_idx)
 
         if method == "NS":

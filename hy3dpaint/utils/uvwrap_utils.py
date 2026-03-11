@@ -14,6 +14,7 @@
 
 import trimesh
 import xatlas
+import numpy as np
 
 
 def mesh_uv_wrap(mesh):
@@ -23,10 +24,13 @@ def mesh_uv_wrap(mesh):
     if len(mesh.faces) > 500000000:
         raise ValueError("The mesh has more than 500,000,000 faces, which is not supported.")
 
+    original_normals = mesh.vertex_normals.copy()
+
     vmapping, indices, uvs = xatlas.parametrize(mesh.vertices, mesh.faces)
 
     mesh.vertices = mesh.vertices[vmapping]
     mesh.faces = indices
     mesh.visual.uv = uvs
+    mesh.vertex_normals = original_normals[vmapping]
 
     return mesh

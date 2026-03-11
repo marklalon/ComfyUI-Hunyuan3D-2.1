@@ -35,25 +35,6 @@ class LoadHunyuan3DModel:
         return (model,)
 
 
-class LoadHunyuan3DImage:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "image_path": ("STRING", {"default": "assets/demo.png"}),
-            }
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "input_image"
-    CATEGORY = "Hunyuan3D-2.1"
-
-    def input_image(self, image_path):
-        image = image_path
-        return (image,)
-
-
 class Hunyuan3DShapeGeneration:
     @classmethod
     def INPUT_TYPES(s):
@@ -76,10 +57,10 @@ class Hunyuan3DShapeGeneration:
         pil_image = tensor_to_pil(image)
         trimesh_mesh = shape_pipeline(image=pil_image)[0]
 
-        # 保存 mesh 到 output/hunyuan3d 目录
-        output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output", "hunyuan3d")
+        # 保存 mesh 到 ComfyUI output/hunyuan3d 目录
+        output_dir = os.path.join(folder_paths.get_output_directory(), "hunyuan3d")
         os.makedirs(output_dir, exist_ok=True)
-        
+
         mesh_path = os.path.join(output_dir, "input_mesh.obj")
         trimesh_mesh.export(mesh_path)
 
@@ -95,7 +76,7 @@ class Hunyuan3DTexureSynthsis:
                 "mesh": ("TRIMESH",),
                 "texture_size": ("INT", {"default": 2048, "min": 512, "max": 4096}),
                 "face_count": ("INT", {"default": 40000, "min": 1000, "max": 500000}),
-                "simplify_mesh": (["enable", "disable"], {"default": "enable"}),
+                "simplify_mesh": (["enable", "disable"], {"default": "false"}),
             }
         }
 
@@ -151,7 +132,7 @@ class Load3DMesh:
             raise ValueError(f"Unsupported format '{ext}'. Supported: {', '.join(self.SUPPORTED_EXTENSIONS)}")
 
         import trimesh
-        mesh = trimesh.load(mesh_path, force="mesh", merge_primitives=True)
+        mesh = trimesh.load(mesh_path)
 
         return (mesh_path, mesh)
 

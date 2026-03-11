@@ -18,11 +18,10 @@ sys.path.insert(0, _this_dir)
 sys.path.insert(0, os.path.join(_this_dir, "hy3dpaint"))
 sys.path.insert(0, os.path.join(_this_dir, "hy3dshape"))
 
-from .nodes import LoadHunyuan3DModel, LoadHunyuan3DImage, Hunyuan3DShapeGeneration, Hunyuan3DTexureSynthsis, Load3DMesh, ConvertToGLB
+from .nodes import LoadHunyuan3DModel, Hunyuan3DShapeGeneration, Hunyuan3DTexureSynthsis, Load3DMesh, ConvertToGLB
 
 NODE_CLASS_MAPPINGS = {
     "LoadHunyuan3DModel": LoadHunyuan3DModel,
-    "LoadHunyuan3DImage": LoadHunyuan3DImage,
     "Hunyuan3DShapeGeneration": Hunyuan3DShapeGeneration,
     "Hunyuan3DTexureSynthsis": Hunyuan3DTexureSynthsis,
     "Load3DMesh": Load3DMesh,
@@ -31,7 +30,6 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadHunyuan3DModel": "Load Hunyuan3D Model",
-    "LoadHunyuan3DImage": "Load Hunyuan3D Image",
     "Hunyuan3DShapeGeneration": "Hunyuan3D Shape Generation",
     "Hunyuan3DTexureSynthsis": "Hunyuan3D Texure Synthsis",
     "Load3DMesh": "Load 3D Mesh (OBJ/GLB/STL...)",

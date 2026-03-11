@@ -37,7 +37,7 @@ def _convert_to_numpy(data: Any, dtype: np.dtype) -> Optional[np.ndarray]:
 
 
 def load_mesh(mesh):
-    """Load mesh data including vertices, faces, UV coordinates and texture."""
+    """Load mesh data including vertices, faces, UV coordinates, normals and texture."""
     # Extract vertex positions and face indices
     vtx_pos = _safe_extract_attribute(mesh, "vertices")
     pos_idx = _safe_extract_attribute(mesh, "faces")
@@ -46,14 +46,18 @@ def load_mesh(mesh):
     vtx_uv = _safe_extract_attribute(mesh, "visual.uv")
     uv_idx = pos_idx  # Reuse face indices for UV mapping
 
+    # Extract vertex normals
+    vtx_normal = _safe_extract_attribute(mesh, "vertex_normals")
+
     # Convert to numpy arrays with appropriate dtypes
     vtx_pos = _convert_to_numpy(vtx_pos, np.float32)
     pos_idx = _convert_to_numpy(pos_idx, np.int32)
     vtx_uv = _convert_to_numpy(vtx_uv, np.float32)
     uv_idx = _convert_to_numpy(uv_idx, np.int32)
+    vtx_normal = _convert_to_numpy(vtx_normal, np.float32)
 
     texture_data = None
-    return vtx_pos, pos_idx, vtx_uv, uv_idx, texture_data
+    return vtx_pos, pos_idx, vtx_uv, uv_idx, vtx_normal, texture_data
 
 
 def _get_base_path_and_name(mesh_path: str) -> Tuple[str, str]:
@@ -93,7 +97,7 @@ def _write_mtl_properties(f, properties: Dict[str, Any]):
 
 
 def _create_obj_content(
-    vtx_pos: np.ndarray, vtx_uv: np.ndarray, pos_idx: np.ndarray, uv_idx: np.ndarray, name: str
+    vtx_pos: np.ndarray, vtx_uv: np.ndarray, pos_idx: np.ndarray, uv_idx: np.ndarray, name: str, vtx_normal: np.ndarray = None
 ) -> str:
     """Create OBJ file content."""
     buffer = StringIO()
@@ -102,12 +106,23 @@ def _create_obj_content(
     buffer.write(f"mtllib {name}.mtl\no {name}\n")
     np.savetxt(buffer, vtx_pos, fmt="v %.6f %.6f %.6f")
     np.savetxt(buffer, vtx_uv, fmt="vt %.6f %.6f")
+    
+    # Write vertex normals if provided
+    if vtx_normal is not None:
+        np.savetxt(buffer, vtx_normal, fmt="vn %.6f %.6f %.6f")
+    
     buffer.write("s 0\nusemtl Material\n")
 
     # Write faces
     pos_idx_plus1 = pos_idx + 1
     uv_idx_plus1 = uv_idx + 1
-    face_format = np.frompyfunc(lambda *x: f"{int(x[0])}/{int(x[1])}", 2, 1)
+    
+    if vtx_normal is not None:
+        # Face format: f v/vt/vn v/vt/vn v/vt/vn
+        face_format = np.frompyfunc(lambda *x: f"{int(x[0])}/{int(x[1])}/{int(x[0])}", 2, 1)
+    else:
+        # Face format: f v/vt v/vt v/vt
+        face_format = np.frompyfunc(lambda *x: f"{int(x[0])}/{int(x[1])}", 2, 1)
     faces = face_format(pos_idx_plus1, uv_idx_plus1)
     face_strings = [f"f {' '.join(face)}" for face in faces]
     buffer.write("\n".join(face_strings) + "\n")
@@ -115,18 +130,19 @@ def _create_obj_content(
     return buffer.getvalue()
 
 
-def save_obj_mesh(mesh_path, vtx_pos, pos_idx, vtx_uv, uv_idx, texture, metallic=None, roughness=None, normal=None):
+def save_obj_mesh(mesh_path, vtx_pos, pos_idx, vtx_uv, uv_idx, texture, metallic=None, roughness=None, normal=None, vtx_normal=None):
     """Save mesh as OBJ file with textures and material."""
     # Convert inputs to numpy arrays
     vtx_pos = _convert_to_numpy(vtx_pos, np.float32)
     vtx_uv = _convert_to_numpy(vtx_uv, np.float32)
     pos_idx = _convert_to_numpy(pos_idx, np.int32)
     uv_idx = _convert_to_numpy(uv_idx, np.int32)
+    vtx_normal = _convert_to_numpy(vtx_normal, np.float32)
 
     base_path, name = _get_base_path_and_name(mesh_path)
 
     # Create and save OBJ content
-    obj_content = _create_obj_content(vtx_pos, vtx_uv, pos_idx, uv_idx, name)
+    obj_content = _create_obj_content(vtx_pos, vtx_uv, pos_idx, uv_idx, name, vtx_normal)
     with open(mesh_path, "w") as obj_file:
         obj_file.write(obj_content)
 
@@ -188,8 +204,8 @@ def _create_mtl_file(base_path: str, texture_maps: Dict[str, str], is_pbr: bool)
             _write_mtl_properties(f, properties)
 
 
-def save_mesh(mesh_path, vtx_pos, pos_idx, vtx_uv, uv_idx, texture, metallic=None, roughness=None, normal=None):
+def save_mesh(mesh_path, vtx_pos, pos_idx, vtx_uv, uv_idx, texture, metallic=None, roughness=None, normal=None, vtx_normal=None):
     """Save mesh using OBJ format."""
     save_obj_mesh(
-        mesh_path, vtx_pos, pos_idx, vtx_uv, uv_idx, texture, metallic=metallic, roughness=roughness, normal=normal
+        mesh_path, vtx_pos, pos_idx, vtx_uv, uv_idx, texture, metallic=metallic, roughness=roughness, normal=normal, vtx_normal=vtx_normal
     )

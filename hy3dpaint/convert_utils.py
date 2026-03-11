@@ -4,8 +4,6 @@ import numpy as np
 from PIL import Image
 import base64
 import io
-import tempfile
-import os
 
 
 def combine_metallic_roughness(metallic, roughness, output_path=None):
@@ -69,103 +67,246 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
     """
     # 1. 加载mesh
     if isinstance(mesh, str):
-        mesh = trimesh.load(mesh)
+        mesh = trimesh.load(mesh, force='mesh')
+    
+    # Handle trimesh Scene (concatenate all meshes)
+    if isinstance(mesh, trimesh.Scene):
+        mesh = mesh.dump(concatenate=True)
 
-    # 2. 导出为临时GLB
-    with tempfile.NamedTemporaryFile(suffix='.glb', delete=False) as temp_file:
-        temp_glb = temp_file.name
-    mesh.export(temp_glb)
+    # Get mesh data
+    vertices = mesh.vertices.astype(np.float32)
+    faces = mesh.faces.astype(np.uint32)
+    
+    # Get normals if available
+    if hasattr(mesh, 'vertex_normals') and mesh.vertex_normals is not None:
+        normals = mesh.vertex_normals.astype(np.float32)
+    else:
+        # Calculate normals from faces
+        normals = trimesh.util.mean_vertex_normals(
+            len(vertices), faces, mesh.face_normals
+        ).astype(np.float32)
 
-    try:
-        # 3. 加载GLB文件进行材质编辑
-        gltf = pygltflib.GLTF2().load(temp_glb)
+    # Get UV coordinates if available
+    # Flip V coordinate for glTF compatibility (OBJ format uses top-left, glTF uses bottom-left origin)
+    uvs = None
+    if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'uv'):
+        uvs = mesh.visual.uv.astype(np.float32)
+        uvs[:, 1] = 1.0 - uvs[:, 1]
 
-        # 4. 准备纹理数据
-        def image_to_data_uri(image):
-            """将图像(PIL Image或路径)转换为data URI"""
-            if isinstance(image, str):
-                with open(image, "rb") as f:
-                    image_data = f.read()
-            else:
-                # PIL Image 对象
-                buffer = io.BytesIO()
-                image.save(buffer, format="PNG")
-                image_data = buffer.getvalue()
-            encoded = base64.b64encode(image_data).decode()
-            return f"data:image/png;base64,{encoded}"
+    # 2. Create GLB directly with pygltflib
+    from pygltflib import GLTF2, Buffer, BufferView, Accessor, Mesh, Primitive, Node, Scene
+    
+    # Create binary buffer
+    # Layout: vertices | normals | uvs | indices
+    binary = bytearray()
+    
+    # Vertices
+    vertex_byte_offset = len(binary)
+    vertex_buffer = vertices.tobytes()
+    binary.extend(vertex_buffer)
+    
+    # Normals
+    normal_byte_offset = len(binary)
+    normal_buffer = normals.tobytes()
+    binary.extend(normal_buffer)
+    
+    # UVs (if available)
+    uv_byte_offset = len(binary)
+    uv_buffer = b''
+    if uvs is not None:
+        uv_buffer = uvs.tobytes()
+        binary.extend(uv_buffer)
+    
+    # Indices
+    index_byte_offset = len(binary)
+    index_buffer = faces.tobytes()
+    binary.extend(index_buffer)
+    
+    total_byte_length = len(binary)
+    
+    # Create buffer views
+    buffer_views = []
+    
+    # Vertex buffer view
+    buffer_views.append(BufferView(
+        buffer=0,
+        byteOffset=vertex_byte_offset,
+        byteLength=len(vertex_buffer),
+        target=34962  # ARRAY_BUFFER
+    ))
+    
+    # Normal buffer view
+    buffer_views.append(BufferView(
+        buffer=0,
+        byteOffset=normal_byte_offset,
+        byteLength=len(normal_buffer),
+        target=34962  # ARRAY_BUFFER
+    ))
+    
+    # UV buffer view (if available)
+    if uvs is not None:
+        buffer_views.append(BufferView(
+            buffer=0,
+            byteOffset=uv_byte_offset,
+            byteLength=len(uv_buffer),
+            target=34962  # ARRAY_BUFFER
+        ))
+    
+    # Index buffer view
+    buffer_views.append(BufferView(
+        buffer=0,
+        byteOffset=index_byte_offset,
+        byteLength=len(index_buffer),
+        target=34963  # ELEMENT_ARRAY_BUFFER
+    ))
+    
+    # Create accessors
+    accessors = []
+    
+    # Vertex accessor
+    accessors.append(Accessor(
+        bufferView=0,
+        byteOffset=0,
+        componentType=5126,  # FLOAT
+        count=len(vertices),
+        type="VEC3",
+        max=vertices.max(axis=0).tolist(),
+        min=vertices.min(axis=0).tolist()
+    ))
+    
+    # Normal accessor
+    accessors.append(Accessor(
+        bufferView=1,
+        byteOffset=0,
+        componentType=5126,  # FLOAT
+        count=len(normals),
+        type="VEC3"
+    ))
+    
+    # UV accessor (if available)
+    uv_accessor_index = None
+    if uvs is not None:
+        accessors.append(Accessor(
+            bufferView=2,
+            byteOffset=0,
+            componentType=5126,  # FLOAT
+            count=len(uvs),
+            type="VEC2"
+        ))
+        uv_accessor_index = 2
+    
+    # Index accessor
+    index_accessor_index = 3 if uvs is not None else 2
+    accessors.append(Accessor(
+        bufferView=index_accessor_index,
+        byteOffset=0,
+        componentType=5125,  # UNSIGNED_INT
+        count=len(faces) * 3,
+        type="SCALAR"
+    ))
+    
+    # 3. Prepare textures
+    def image_to_data_uri(image):
+        """将图像(PIL Image或路径)转换为data URI"""
+        if isinstance(image, str):
+            with open(image, "rb") as f:
+                image_data = f.read()
+        else:
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            image_data = buffer.getvalue()
+        encoded = base64.b64encode(image_data).decode()
+        return f"data:image/png;base64,{encoded}"
 
-        # 5. 合并metallic和roughness
-        if "metallic" in textures_dict and "roughness" in textures_dict:
-            mr_combined = combine_metallic_roughness(textures_dict["metallic"], textures_dict["roughness"])
-            textures_dict = dict(textures_dict)  # 复制以避免修改原字典
-            textures_dict["metallicRoughness"] = mr_combined
+    # 合并metallic和roughness
+    if "metallic" in textures_dict and "roughness" in textures_dict:
+        mr_combined = combine_metallic_roughness(textures_dict["metallic"], textures_dict["roughness"])
+        textures_dict = dict(textures_dict)
+        textures_dict["metallicRoughness"] = mr_combined
 
-        # 6. 添加图像到GLTF
-        images = []
-        textures = []
+    # 添加图像到GLTF
+    images = []
+    textures = []
 
-        texture_mapping = {
-            "albedo": "baseColorTexture",
-            "metallicRoughness": "metallicRoughnessTexture",
-            "normal": "normalTexture",
-            "ao": "occlusionTexture",
-        }
+    texture_mapping = {
+        "albedo": "baseColorTexture",
+        "metallicRoughness": "metallicRoughnessTexture",
+        "normal": "normalTexture",
+        "ao": "occlusionTexture",
+    }
 
-        for tex_type, tex_value in textures_dict.items():
-            if tex_type in texture_mapping and tex_value:
-                # 添加图像
-                image = pygltflib.Image(uri=image_to_data_uri(tex_value))
-                images.append(image)
+    for tex_type, tex_value in textures_dict.items():
+        if tex_type in texture_mapping and tex_value:
+            image = pygltflib.Image(uri=image_to_data_uri(tex_value))
+            images.append(image)
+            texture = pygltflib.Texture(source=len(images) - 1)
+            textures.append(texture)
 
-                # 添加纹理
-                texture = pygltflib.Texture(source=len(images) - 1)
-                textures.append(texture)
+    # 4. Create PBR material
+    pbr_metallic_roughness = pygltflib.PbrMetallicRoughness(
+        baseColorFactor=[1.0, 1.0, 1.0, 1.0],
+        metallicFactor=1.0,
+        roughnessFactor=1.0
+    )
 
-        # 7. 创建PBR材质
-        pbr_metallic_roughness = pygltflib.PbrMetallicRoughness(
-            baseColorFactor=[1.0, 1.0, 1.0, 1.0], metallicFactor=1.0, roughnessFactor=1.0
-        )
+    texture_index = 0
+    if "albedo" in textures_dict:
+        pbr_metallic_roughness.baseColorTexture = pygltflib.TextureInfo(index=texture_index)
+        texture_index += 1
 
-        # 设置纹理索引
-        texture_index = 0
-        if "albedo" in textures_dict:
-            pbr_metallic_roughness.baseColorTexture = pygltflib.TextureInfo(index=texture_index)
-            texture_index += 1
+    if "metallicRoughness" in textures_dict:
+        pbr_metallic_roughness.metallicRoughnessTexture = pygltflib.TextureInfo(index=texture_index)
+        texture_index += 1
 
-        if "metallicRoughness" in textures_dict:
-            pbr_metallic_roughness.metallicRoughnessTexture = pygltflib.TextureInfo(index=texture_index)
-            texture_index += 1
+    material = pygltflib.Material(name="PBR_Material", pbrMetallicRoughness=pbr_metallic_roughness)
 
-        # 创建材质
-        material = pygltflib.Material(name="PBR_Material", pbrMetallicRoughness=pbr_metallic_roughness)
+    if "normal" in textures_dict:
+        material.normalTexture = pygltflib.NormalTextureInfo(index=texture_index)
+        texture_index += 1
 
-        # 添加法线贴图
-        if "normal" in textures_dict:
-            material.normalTexture = pygltflib.NormalTextureInfo(index=texture_index)
-            texture_index += 1
+    if "ao" in textures_dict:
+        material.occlusionTexture = pygltflib.OcclusionTextureInfo(index=texture_index)
 
-        # 添加AO贴图
-        if "ao" in textures_dict:
-            material.occlusionTexture = pygltflib.OcclusionTextureInfo(index=texture_index)
-
-        # 8. 更新GLTF
-        gltf.images = images
-        gltf.textures = textures
-        gltf.materials = [material]
-
-        # 确保mesh使用材质
-        if gltf.meshes:
-            for primitive in gltf.meshes[0].primitives:
-                primitive.material = 0
-
-        # 9. 将data URI图像转为binary buffer view（GLB二进制块）
-        gltf.convert_images(pygltflib.ImageFormat.BUFFERVIEW)
-
-        # 10. 保存最终GLB
-        gltf.save(output_path)
-        print(f"PBR GLB文件已保存: {output_path}")
-        
-    finally:
-        # 清理临时文件
-        if os.path.exists(temp_glb):
-            os.remove(temp_glb)
+    # 5. Create primitive and mesh
+    primitive_attrs = {
+        'POSITION': 0,
+        'NORMAL': 1,
+    }
+    if uv_accessor_index is not None:
+        primitive_attrs['TEXCOORD_0'] = uv_accessor_index
+    
+    primitive = Primitive(
+        attributes=pygltflib.Attributes(**primitive_attrs),
+        indices=index_accessor_index,
+        material=0
+    )
+    
+    gltf_mesh = Mesh(primitives=[primitive])
+    
+    # 6. Create node and scene
+    node = Node(mesh=0)
+    scene = Scene(nodes=[0])
+    
+    # 7. Create GLTF
+    gltf = GLTF2(
+        scene=0,
+        scenes=[scene],
+        nodes=[node],
+        meshes=[gltf_mesh],
+        materials=[material],
+        accessors=accessors,
+        bufferViews=buffer_views,
+        buffers=[Buffer(byteLength=total_byte_length)],
+        images=images,
+        textures=textures
+    )
+    
+    # Set binary data
+    gltf.set_binary_blob(bytes(binary))
+    
+    # Convert images to buffer views
+    gltf.convert_images(pygltflib.ImageFormat.BUFFERVIEW)
+    
+    # 8. Save GLB
+    gltf.save(output_path)
+    print(f"PBR GLB文件已保存: {output_path}")
