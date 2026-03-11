@@ -95,7 +95,7 @@ class Hunyuan3DPaintPipeline:
         print("Models Loaded.")
 
     @torch.no_grad()
-    def __call__(self, mesh=None, mesh_path=None, image_path=None, output_mesh_path=None, use_remesh=True):
+    def __call__(self, mesh=None, mesh_path=None, image_path=None, output_mesh_path=None, use_remesh=True, progress_callback=None):
         """Generate texture for 3D mesh using multiview diffusion
         
         Args:
@@ -104,7 +104,11 @@ class Hunyuan3DPaintPipeline:
             image_path: image path or PIL Image
             output_mesh_path: output path for textured mesh
             use_remesh: whether to remesh the mesh
+            progress_callback: callback function(stage, progress, message) for progress updates
         """
+        def report_progress(stage, progress, message):
+            if progress_callback:
+                progress_callback(stage, progress, message)
         # Ensure image_prompt is a list
         if isinstance(image_path, str):
             image_prompt = Image.open(image_path)
@@ -149,17 +153,19 @@ class Hunyuan3DPaintPipeline:
         self.render.load_mesh(mesh=mesh)
 
         ########### View Selection #########
+        report_progress("view_selection", 0, "Selecting views...")
         selected_camera_elevs, selected_camera_azims, selected_view_weights = self.view_processor.bake_view_selection(
             self.config.candidate_camera_elevs,
             self.config.candidate_camera_azims,
             self.config.candidate_view_weights,
             self.config.max_selected_view_num,
         )
-
+        report_progress("view_selection", 50, "Rendering normal maps...")
         normal_maps = self.view_processor.render_normal_multiview(
             selected_camera_elevs, selected_camera_azims, use_abs_coor=True
         )
         position_maps = self.view_processor.render_position_multiview(selected_camera_elevs, selected_camera_azims)
+        report_progress("view_selection", 100, "View selection complete")
 
         ##########  Style  ###########
         image_caption = "high quality"
@@ -174,6 +180,7 @@ class Hunyuan3DPaintPipeline:
         image_style = [image.convert("RGB") for image in image_style]
 
         ###########  Multiview  ##########
+        report_progress("multiview", 0, "Running multiview diffusion...")
         multiviews_pbr = self.models["multiview_model"](
             image_style,
             normal_maps + position_maps,
@@ -181,37 +188,53 @@ class Hunyuan3DPaintPipeline:
             custom_view_size=self.config.resolution,
             resize_input=True,
         )
+        report_progress("multiview", 100, "Multiview diffusion complete")
+        
         ###########  Enhance  ##########
+        report_progress("enhance", 0, "Enhancing texture quality...")
         enhance_images = {}
         enhance_images["albedo"] = copy.deepcopy(multiviews_pbr["albedo"])
         enhance_images["mr"] = copy.deepcopy(multiviews_pbr["mr"])
 
+        total_enhance = len(enhance_images["albedo"]) * 2
+        enhance_idx = 0
         for i in range(len(enhance_images["albedo"])):
             enhance_images["albedo"][i] = self.models["super_model"](enhance_images["albedo"][i])
+            enhance_idx += 1
+            report_progress("enhance", int(enhance_idx / total_enhance * 100), f"Enhancing albedo view {i+1}/{len(enhance_images['albedo'])}")
             enhance_images["mr"][i] = self.models["super_model"](enhance_images["mr"][i])
+            enhance_idx += 1
+            report_progress("enhance", int(enhance_idx / total_enhance * 100), f"Enhancing mr view {i+1}/{len(enhance_images['mr'])}")
 
         ###########  Bake  ##########
+        report_progress("bake", 0, "Baking textures...")
         for i in range(len(enhance_images)):
             enhance_images["albedo"][i] = enhance_images["albedo"][i].resize(
                 (self.config.render_size, self.config.render_size)
             )
             enhance_images["mr"][i] = enhance_images["mr"][i].resize((self.config.render_size, self.config.render_size))
+        report_progress("bake", 20, "Baking albedo texture...")
         texture, mask = self.view_processor.bake_from_multiview(
             enhance_images["albedo"], selected_camera_elevs, selected_camera_azims, selected_view_weights
         )
         mask_np = (mask.squeeze(-1).cpu().numpy() * 255).astype(np.uint8)
+        report_progress("bake", 60, "Baking mr texture...")
         texture_mr, mask_mr = self.view_processor.bake_from_multiview(
             enhance_images["mr"], selected_camera_elevs, selected_camera_azims, selected_view_weights
         )
         mask_mr_np = (mask_mr.squeeze(-1).cpu().numpy() * 255).astype(np.uint8)
+        report_progress("bake", 100, "Texture baking complete")
 
         ##########  inpaint  ###########
+        report_progress("inpaint", 0, "Inpainting textures...")
         texture = self.view_processor.texture_inpaint(texture, mask_np)
         self.render.set_texture(texture, force_set=True)
         if "mr" in enhance_images:
             texture_mr = self.view_processor.texture_inpaint(texture_mr, mask_mr_np)
             self.render.set_texture_mr(texture_mr)
+        report_progress("inpaint", 100, "Texture inpainting complete")
 
+        report_progress("save", 0, "Saving mesh...")
         self.render.save_mesh(output_mesh_path, downsample=True)
 
         # 获取纹理图像 (numpy array, [H, W, 3], range [0, 1])
