@@ -1,3 +1,4 @@
+import mimetypes
 import trimesh
 import pygltflib
 import numpy as np
@@ -77,14 +78,8 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
     vertices = mesh.vertices.astype(np.float32)
     faces = mesh.faces.astype(np.uint32)
     
-    # Get normals if available
-    if hasattr(mesh, 'vertex_normals') and mesh.vertex_normals is not None:
-        normals = mesh.vertex_normals.astype(np.float32)
-    else:
-        # Calculate normals from faces
-        normals = trimesh.util.mean_vertex_normals(
-            len(vertices), faces, mesh.face_normals
-        ).astype(np.float32)
+    # Get normals (trimesh always computes vertex_normals automatically)
+    normals = mesh.vertex_normals.astype(np.float32)
 
     # Get UV coordinates if available
     # Flip V coordinate for glTF compatibility (OBJ format uses top-left, glTF uses bottom-left origin)
@@ -211,12 +206,14 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
         if isinstance(image, str):
             with open(image, "rb") as f:
                 image_data = f.read()
+            mime = mimetypes.guess_type(image)[0] or "image/png"
         else:
             buffer = io.BytesIO()
             image.save(buffer, format="PNG")
             image_data = buffer.getvalue()
+            mime = "image/png"
         encoded = base64.b64encode(image_data).decode()
-        return f"data:image/png;base64,{encoded}"
+        return f"data:{mime};base64,{encoded}"
 
     # 合并metallic和roughness
     if "metallic" in textures_dict and "roughness" in textures_dict:
@@ -224,23 +221,19 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
         textures_dict = dict(textures_dict)
         textures_dict["metallicRoughness"] = mr_combined
 
-    # 添加图像到GLTF
+    # 按固定顺序添加图像到GLTF，并记录每种纹理对应的索引
+    # 固定顺序确保 tex_type_to_index 与材质赋值保持一致
+    TEXTURE_ORDER = ("albedo", "metallicRoughness", "normal", "ao")
     images = []
     textures = []
+    tex_type_to_index = {}
 
-    texture_mapping = {
-        "albedo": "baseColorTexture",
-        "metallicRoughness": "metallicRoughnessTexture",
-        "normal": "normalTexture",
-        "ao": "occlusionTexture",
-    }
-
-    for tex_type, tex_value in textures_dict.items():
-        if tex_type in texture_mapping and tex_value:
-            image = pygltflib.Image(uri=image_to_data_uri(tex_value))
-            images.append(image)
-            texture = pygltflib.Texture(source=len(images) - 1)
-            textures.append(texture)
+    for tex_type in TEXTURE_ORDER:
+        tex_value = textures_dict.get(tex_type)
+        if tex_value:
+            tex_type_to_index[tex_type] = len(images)
+            images.append(pygltflib.Image(uri=image_to_data_uri(tex_value)))
+            textures.append(pygltflib.Texture(source=len(images) - 1))
 
     # 4. Create PBR material
     pbr_metallic_roughness = pygltflib.PbrMetallicRoughness(
@@ -249,23 +242,19 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
         roughnessFactor=1.0
     )
 
-    texture_index = 0
-    if "albedo" in textures_dict:
-        pbr_metallic_roughness.baseColorTexture = pygltflib.TextureInfo(index=texture_index)
-        texture_index += 1
+    if "albedo" in tex_type_to_index:
+        pbr_metallic_roughness.baseColorTexture = pygltflib.TextureInfo(index=tex_type_to_index["albedo"])
 
-    if "metallicRoughness" in textures_dict:
-        pbr_metallic_roughness.metallicRoughnessTexture = pygltflib.TextureInfo(index=texture_index)
-        texture_index += 1
+    if "metallicRoughness" in tex_type_to_index:
+        pbr_metallic_roughness.metallicRoughnessTexture = pygltflib.TextureInfo(index=tex_type_to_index["metallicRoughness"])
 
     material = pygltflib.Material(name="PBR_Material", pbrMetallicRoughness=pbr_metallic_roughness)
 
-    if "normal" in textures_dict:
-        material.normalTexture = pygltflib.NormalTextureInfo(index=texture_index)
-        texture_index += 1
+    if "normal" in tex_type_to_index:
+        material.normalTexture = pygltflib.NormalTextureInfo(index=tex_type_to_index["normal"])
 
-    if "ao" in textures_dict:
-        material.occlusionTexture = pygltflib.OcclusionTextureInfo(index=texture_index)
+    if "ao" in tex_type_to_index:
+        material.occlusionTexture = pygltflib.OcclusionTextureInfo(index=tex_type_to_index["ao"])
 
     # 5. Create primitive and mesh
     primitive_attrs = {

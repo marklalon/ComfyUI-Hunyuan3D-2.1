@@ -161,12 +161,15 @@ class ConvertToGLB:
     def convert(self, mesh, filename_prefix, albedo_texture=None, metallic_texture=None, roughness_texture=None):
         from hy3dpaint.convert_utils import create_glb_with_pbr_materials
         
-        # 获取输出目录
+        # 获取输出目录（counter 基于图片文件，不可直接用于 GLB）
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix, folder_paths.get_output_directory()
         )
-        
-        # 生成 GLB 文件名
+
+        # 找到第一个不与已有 GLB 文件冲突的 counter
+        while os.path.exists(os.path.join(full_output_folder, f"{filename}_{counter:05}.glb")):
+            counter += 1
+
         glb_filename = f"{filename}_{counter:05}.glb"
         glb_path = os.path.join(full_output_folder, glb_filename)
         
@@ -174,15 +177,15 @@ class ConvertToGLB:
         textures_dict = {}
         
         if albedo_texture is not None:
-            albedo_np = (albedo_texture[0].cpu().numpy() * 255).astype(np.uint8)
+            albedo_np = np.clip(albedo_texture[0].cpu().numpy() * 255, 0, 255).astype(np.uint8)
             textures_dict['albedo'] = Image.fromarray(albedo_np)
-        
+
         if metallic_texture is not None:
-            metallic_np = (metallic_texture[0].cpu().numpy() * 255).astype(np.uint8)
+            metallic_np = np.clip(metallic_texture[0].cpu().numpy() * 255, 0, 255).astype(np.uint8)
             textures_dict['metallic'] = Image.fromarray(metallic_np)
-        
+
         if roughness_texture is not None:
-            roughness_np = (roughness_texture[0].cpu().numpy() * 255).astype(np.uint8)
+            roughness_np = np.clip(roughness_texture[0].cpu().numpy() * 255, 0, 255).astype(np.uint8)
             textures_dict['roughness'] = Image.fromarray(roughness_np)
         
         # 调用 create_glb_with_pbr_materials

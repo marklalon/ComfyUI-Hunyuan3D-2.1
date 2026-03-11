@@ -76,10 +76,15 @@ def _save_texture_map(
 ) -> str:
     """Save texture map with optional color conversion."""
     path = f"{base_path}{suffix}{image_format}"
-    processed_texture = (texture * 255).astype(np.uint8)
+    # Clip to [0, 255] before cast to prevent uint8 overflow/wrap-around
+    processed_texture = np.clip(texture * 255, 0, 255).astype(np.uint8)
 
     if color_convert is not None:
-        processed_texture = cv2.cvtColor(processed_texture, color_convert)
+        # If already grayscale (single channel), skip cvtColor to avoid cv2 error
+        if processed_texture.ndim == 2 or processed_texture.shape[-1] == 1:
+            processed_texture = processed_texture.squeeze()
+        else:
+            processed_texture = cv2.cvtColor(processed_texture, color_convert)
         cv2.imwrite(path, processed_texture)
     else:
         cv2.imwrite(path, processed_texture[..., ::-1])  # RGB to BGR
@@ -106,25 +111,28 @@ def _create_obj_content(
     buffer.write(f"mtllib {name}.mtl\no {name}\n")
     np.savetxt(buffer, vtx_pos, fmt="v %.6f %.6f %.6f")
     np.savetxt(buffer, vtx_uv, fmt="vt %.6f %.6f")
-    
+
     # Write vertex normals if provided
     if vtx_normal is not None:
         np.savetxt(buffer, vtx_normal, fmt="vn %.6f %.6f %.6f")
-    
+
     buffer.write("s 0\nusemtl Material\n")
 
-    # Write faces
-    pos_idx_plus1 = pos_idx + 1
-    uv_idx_plus1 = uv_idx + 1
-    
+    # Write faces with vectorized formatting (faster than np.frompyfunc)
+    p = pos_idx + 1   # shape: (F, 3), 1-based
+    u = uv_idx + 1    # shape: (F, 3), 1-based
     if vtx_normal is not None:
-        # Face format: f v/vt/vn v/vt/vn v/vt/vn
-        face_format = np.frompyfunc(lambda *x: f"{int(x[0])}/{int(x[1])}/{int(x[0])}", 2, 1)
+        # Face format: f v/vt/vn — normal index equals position index (per-vertex normals)
+        face_strings = [
+            f"f {p[i,0]}/{u[i,0]}/{p[i,0]} {p[i,1]}/{u[i,1]}/{p[i,1]} {p[i,2]}/{u[i,2]}/{p[i,2]}"
+            for i in range(len(p))
+        ]
     else:
         # Face format: f v/vt v/vt v/vt
-        face_format = np.frompyfunc(lambda *x: f"{int(x[0])}/{int(x[1])}", 2, 1)
-    faces = face_format(pos_idx_plus1, uv_idx_plus1)
-    face_strings = [f"f {' '.join(face)}" for face in faces]
+        face_strings = [
+            f"f {p[i,0]}/{u[i,0]} {p[i,1]}/{u[i,1]} {p[i,2]}/{u[i,2]}"
+            for i in range(len(p))
+        ]
     buffer.write("\n".join(face_strings) + "\n")
 
     return buffer.getvalue()
@@ -146,21 +154,19 @@ def save_obj_mesh(mesh_path, vtx_pos, pos_idx, vtx_uv, uv_idx, texture, metallic
     with open(mesh_path, "w") as obj_file:
         obj_file.write(obj_content)
 
-    # Save texture maps
+    # Save texture maps — use PNG for precision-sensitive PBR maps
     texture_maps = {}
     texture_maps["diffuse"] = _save_texture_map(texture, base_path)
 
     if metallic is not None:
-        texture_maps["metallic"] = _save_texture_map(metallic, base_path, "_metallic", color_convert=cv2.COLOR_RGB2GRAY)
+        texture_maps["metallic"] = _save_texture_map(metallic, base_path, "_metallic", ".png", color_convert=cv2.COLOR_RGB2GRAY)
     if roughness is not None:
-        texture_maps["roughness"] = _save_texture_map(
-            roughness, base_path, "_roughness", color_convert=cv2.COLOR_RGB2GRAY
-        )
+        texture_maps["roughness"] = _save_texture_map(roughness, base_path, "_roughness", ".png", color_convert=cv2.COLOR_RGB2GRAY)
     if normal is not None:
-        texture_maps["normal"] = _save_texture_map(normal, base_path, "_normal")
+        texture_maps["normal"] = _save_texture_map(normal, base_path, "_normal", ".png")
 
-    # Create MTL file
-    _create_mtl_file(base_path, texture_maps, metallic is not None)
+    # is_pbr when any PBR map is provided
+    _create_mtl_file(base_path, texture_maps, any(x is not None for x in (metallic, roughness, normal)))
 
 
 def _create_mtl_file(base_path: str, texture_maps: Dict[str, str], is_pbr: bool):
@@ -174,10 +180,10 @@ def _create_mtl_file(base_path: str, texture_maps: Dict[str, str], is_pbr: bool)
             # PBR material properties
             properties = {
                 "Kd": [0.800, 0.800, 0.800],
-                "Ke": [0.000, 0.000, 0.000],  # 鐜鍏夐伄钄�
-                "Ni": 1.500,  # 鎶樺皠绯绘暟
-                "d": 1.0,  # 閫忔槑搴�
-                "illum": 2,  # 鍏夌収妯″瀷
+                "Ke": [0.000, 0.000, 0.000],
+                "Ni": 1.500,
+                "d": 1.0,
+                "illum": 2,
                 "map_Kd": texture_maps["diffuse"],
             }
             _write_mtl_properties(f, properties)
