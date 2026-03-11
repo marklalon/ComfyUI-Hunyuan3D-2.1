@@ -6,7 +6,7 @@ from PIL import Image
 import folder_paths
 
 
-def send_progress(message, progress=None, node_id=None):
+def send_progress(message, progress=None, node_id=None, print_to_console=False):
     """发送进度消息到 ComfyUI 界面
     
     Args:
@@ -14,6 +14,9 @@ def send_progress(message, progress=None, node_id=None):
         progress: 进度百分比 (0-100)，如果为 None 则只显示文字
         node_id: 节点 ID
     """
+    if print_to_console:
+        print(f"[Hunyuan3D] {message}{' (' + str(progress) + '%)' if progress else ''}")
+
     try:
         from server import PromptServer
         if progress is not None:
@@ -129,8 +132,6 @@ class Hunyuan3DTexureSynthsis:
                 "image": ("IMAGE",),
                 "mesh": ("TRIMESH",),
                 "texture_size": ("INT", {"default": 2048, "min": 512, "max": 4096}),
-                "face_count": ("INT", {"default": 40000, "min": 1000, "max": 500000}),
-                "simplify_mesh": (["enable", "disable"], {"default": "false"}),
             }
         }
 
@@ -139,14 +140,13 @@ class Hunyuan3DTexureSynthsis:
     FUNCTION = "generate"
     CATEGORY = "Hunyuan3D-2.1"
 
-    def generate(self, image, mesh, texture_size, face_count, simplify_mesh):
+    def generate(self, image, mesh, texture_size):
         import trimesh
         from hy3dpaint.textureGenPipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintConfig
 
         send_progress("Initializing texture synthesis pipeline...", 5)
-        paint_pipeline = Hunyuan3DPaintPipeline(Hunyuan3DPaintConfig(texture_size=texture_size, face_count=face_count))
+        paint_pipeline = Hunyuan3DPaintPipeline(Hunyuan3DPaintConfig(texture_size=texture_size))
         
-        use_remesh = (simplify_mesh == "enable")
         send_progress("Preparing image input...", 10)
         pil_image = tensor_to_pil(image)
         
@@ -172,7 +172,6 @@ class Hunyuan3DTexureSynthsis:
         mesh_textured_path, albedo_texture, metallic_texture, roughness_texture = paint_pipeline(
             mesh=mesh, 
             image_path=pil_image, 
-            use_remesh=use_remesh,
             progress_callback=paint_progress_callback
         )
 
@@ -278,3 +277,69 @@ class ConvertToGLB:
         create_glb_with_pbr_materials(mesh, textures_dict, glb_path)
         
         return (glb_path,)
+
+
+class RemeshMesh:
+    """网格简化/重划分节点，使用 pymeshlab 清理网格并简化面数"""
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mesh": ("TRIMESH",),
+                "target_count": ("INT", {"default": 40000, "min": 1000, "max": 500000}),
+            }
+        }
+
+    RETURN_TYPES = ("TRIMESH",)
+    RETURN_NAMES = ("mesh",)
+    FUNCTION = "remesh"
+    CATEGORY = "Hunyuan3D-2.1"
+
+    def remesh(self, mesh, target_count):
+        import trimesh
+        import pymeshlab
+        import tempfile
+        import os
+
+        send_progress("Remeshing mesh...", 10)
+        
+        # 创建临时文件
+        with tempfile.NamedTemporaryFile(suffix='.obj', delete=False) as tmp:
+            tmp_path = tmp.name
+        
+        try:
+            # 先保存为 obj 格式
+            mesh.export(tmp_path)
+            
+            send_progress("Cleaning mesh with pymeshlab...", 30)
+            # 使用 pymeshlab 清理网格（去除离散面等）
+            ms = pymeshlab.MeshSet()
+            ms.load_new_mesh(tmp_path)
+            
+            # 保存清理后的网格
+            cleaned_path = tmp_path.replace('.obj', '_cleaned.obj')
+            ms.save_current_mesh(cleaned_path, save_textures=False)
+            
+            send_progress("Loading cleaned mesh...", 50)
+            # 重新加载
+            cleaned_mesh = trimesh.load(cleaned_path, force='mesh')
+            
+            face_num = cleaned_mesh.faces.shape[0]
+            send_progress(f"Current face count: {face_num}, target: {target_count}", 60)
+            
+            # 如果面数超过目标，进行简化
+            if face_num > target_count:
+                send_progress(f"Simplifying mesh from {face_num} to {target_count} faces...", 70, print_to_console=True)
+                cleaned_mesh = cleaned_mesh.simplify_quadric_decimation(face_count=target_count)
+                send_progress(f"Mesh simplified to {cleaned_mesh.faces.shape[0]} faces", 90, print_to_console=True)
+            
+            return (cleaned_mesh,)
+            
+        finally:
+            # 清理临时文件
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            cleaned_path = tmp_path.replace('.obj', '_cleaned.obj')
+            if os.path.exists(cleaned_path):
+                os.remove(cleaned_path)

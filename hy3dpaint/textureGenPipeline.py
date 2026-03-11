@@ -20,7 +20,6 @@ import numpy as np
 from PIL import Image
 from typing import List
 from hy3dpaint.DifferentiableRenderer.MeshRender import MeshRender
-from hy3dpaint.utils.simplify_mesh_utils import remesh_mesh
 from hy3dpaint.utils.multiview_utils import multiviewDiffusionNet
 from hy3dpaint.utils.pipeline_utils import ViewProcessor
 from hy3dpaint.utils.image_super_utils import imageSuperNet
@@ -34,7 +33,7 @@ diffusers_logging.set_verbosity(50)
 
 
 class Hunyuan3DPaintConfig:
-    def __init__(self, texture_size=2048, face_count=40000):
+    def __init__(self, texture_size=2048):
         self.device = "cuda"
 
         _hy3dpaint_dir = os.path.dirname(__file__)
@@ -56,7 +55,6 @@ class Hunyuan3DPaintConfig:
         self.resolution = 512
         self.bake_exp = 4
         self.merge_method = "fast"
-        self.target_count = face_count
 
         # view selection
         self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]
@@ -95,7 +93,7 @@ class Hunyuan3DPaintPipeline:
         print("Models Loaded.")
 
     @torch.no_grad()
-    def __call__(self, mesh=None, mesh_path=None, image_path=None, output_mesh_path=None, use_remesh=True, progress_callback=None):
+    def __call__(self, mesh=None, mesh_path=None, image_path=None, output_mesh_path=None, progress_callback=None):
         """Generate texture for 3D mesh using multiview diffusion
         
         Args:
@@ -103,7 +101,6 @@ class Hunyuan3DPaintPipeline:
             mesh_path: path to mesh file (optional, mutually exclusive with mesh)
             image_path: image path or PIL Image
             output_mesh_path: output path for textured mesh
-            use_remesh: whether to remesh the mesh
             progress_callback: callback function(stage, progress, message) for progress updates
         """
         def report_progress(stage, progress, message):
@@ -126,23 +123,9 @@ class Hunyuan3DPaintPipeline:
             path = tempfile.gettempdir()
         else:
             path = os.path.dirname(mesh_path)
-            
-        # Process mesh
-        if use_remesh:
-            if mesh is not None:
-                # Save trimesh to temp file for remesh
-                temp_mesh_path = os.path.join(path, "input_mesh_for_remesh.obj")
-                mesh.export(temp_mesh_path)
-                processed_mesh_path = os.path.join(path, "white_mesh_remesh.obj")
-                remesh_mesh(temp_mesh_path, processed_mesh_path, target_count=self.config.target_count)
-                mesh = trimesh.load(processed_mesh_path)
-            else:
-                processed_mesh_path = os.path.join(path, "white_mesh_remesh.obj")
-                remesh_mesh(mesh_path, processed_mesh_path, target_count=self.config.target_count)
-                mesh = trimesh.load(processed_mesh_path)
-        else:
-            if mesh is None:
-                mesh = trimesh.load(mesh_path)
+
+        if mesh is None:
+            mesh = trimesh.load(mesh_path)
 
         # Output path
         if output_mesh_path is None:
