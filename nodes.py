@@ -280,7 +280,7 @@ class ConvertToGLB:
 
 
 class RemeshMesh:
-    """网格简化/重划分节点，使用 pymeshlab 清理网格并简化面数"""
+    """网格简化/重划分节点，清理网格并简化面数"""
 
     @classmethod
     def INPUT_TYPES(s):
@@ -296,50 +296,64 @@ class RemeshMesh:
     FUNCTION = "remesh"
     CATEGORY = "Hunyuan3D-2.1"
 
+    def clean_mesh(self, mesh):
+        # 基本清理：移除重复顶点、无效面、重新计算法线
+        mesh = mesh.process(validate=True)
+        
+        # 移除未引用的顶点
+        mesh.remove_unreferenced_vertices()
+        
+        # 合并接近的顶点（可修复 non-manifold 问题）
+        mesh.merge_vertices(merge_tex=True, merge_norm=True)
+        
+        # 再次移除未引用的顶点（合并后可能产生）
+        mesh.remove_unreferenced_vertices()
+
+        return mesh
+
     def remesh(self, mesh, target_count):
         import trimesh
-        import pymeshlab
-        import tempfile
-        import os
-
-        send_progress("Remeshing mesh...", 10)
         
-        # 创建临时文件
-        with tempfile.NamedTemporaryFile(suffix='.obj', delete=False) as tmp:
-            tmp_path = tmp.name
+        send_progress("Remeshing mesh...", 5)
         
-        try:
-            # 先保存为 obj 格式
-            mesh.export(tmp_path)
-            
-            send_progress("Cleaning mesh with pymeshlab...", 30)
-            # 使用 pymeshlab 清理网格（去除离散面等）
-            ms = pymeshlab.MeshSet()
-            ms.load_new_mesh(tmp_path)
-            
-            # 保存清理后的网格
-            cleaned_path = tmp_path.replace('.obj', '_cleaned.obj')
-            ms.save_current_mesh(cleaned_path, save_textures=False)
-            
-            send_progress("Loading cleaned mesh...", 50)
-            # 重新加载
-            cleaned_mesh = trimesh.load(cleaned_path, force='mesh')
-            
-            face_num = cleaned_mesh.faces.shape[0]
-            send_progress(f"Current face count: {face_num}, target: {target_count}", 60)
-            
-            # 如果面数超过目标，进行简化
-            if face_num > target_count:
-                send_progress(f"Simplifying mesh from {face_num} to {target_count} faces...", 70, print_to_console=True)
-                cleaned_mesh = cleaned_mesh.simplify_quadric_decimation(face_count=target_count)
-                send_progress(f"Mesh simplified to {cleaned_mesh.faces.shape[0]} faces", 90, print_to_console=True)
-            
-            return (cleaned_mesh,)
-            
-        finally:
-            # 清理临时文件
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            cleaned_path = tmp_path.replace('.obj', '_cleaned.obj')
-            if os.path.exists(cleaned_path):
-                os.remove(cleaned_path)
+        # 确保是 Trimesh 对象
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+        
+        original_face_num = mesh.faces.shape[0]
+        send_progress(f"Original mesh: {original_face_num} faces", 10, print_to_console=True)
+        
+        # 清理mesh
+        mesh = self.clean_mesh(mesh)        
+        face_num = mesh.faces.shape[0]
+        send_progress(f"Cleaned mesh: {face_num} faces, target: {target_count}", 20, print_to_console=True)
+        
+        # 如果面数超过目标，进行简化
+        if face_num > target_count:
+            send_progress(f"Simplifying mesh from {face_num} to {target_count} faces...", 70, print_to_console=True)
+            mesh = mesh.simplify_quadric_decimation(face_count=target_count)            
+            # 清理mesh
+            mesh = self.clean_mesh(mesh)
+            send_progress(f"Mesh simplified to {mesh.faces.shape[0]} faces", 90, print_to_console=True)
+        
+        # 保存 remesh 后的 mesh 到临时目录
+        output_dir = os.path.join(folder_paths.get_output_directory(), "hunyuan3d_temp")
+        os.makedirs(output_dir, exist_ok=True)
+        mesh_remesh_path = os.path.join(output_dir, "input_mesh_remeshed.obj")
+        
+        # 使用 save_obj_mesh 保存（仅顶点和法线，无UV和纹理）
+        from hy3dpaint.DifferentiableRenderer.mesh_utils import save_obj_mesh
+        
+        # 确保有顶点法线
+        if not hasattr(mesh, 'vertex_normals') or mesh.vertex_normals is None:
+            mesh.compute_vertex_normals()
+        
+        save_obj_mesh(
+            mesh_path=mesh_remesh_path,
+            vtx_pos=mesh.vertices,
+            pos_idx=mesh.faces,
+            vtx_normal=mesh.vertex_normals
+        )
+        send_progress(f"Saved remeshed mesh to: {mesh_remesh_path}", 100, print_to_console=True)
+        
+        return (mesh,)
