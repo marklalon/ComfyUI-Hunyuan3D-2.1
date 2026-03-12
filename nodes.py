@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import torch
 import numpy as np
@@ -311,49 +312,129 @@ class RemeshMesh:
 
         return mesh
 
-    def remesh(self, mesh, target_count):
-        import trimesh
-        
-        send_progress("Remeshing mesh...", 5)
-        
-        # 确保是 Trimesh 对象
-        if isinstance(mesh, trimesh.Scene):
-            mesh = mesh.dump(concatenate=True)
-        
-        original_face_num = mesh.faces.shape[0]
-        send_progress(f"Original mesh: {original_face_num} faces", 10, print_to_console=True)
-        
-        # 清理mesh
-        mesh = self.clean_mesh(mesh)        
-        face_num = mesh.faces.shape[0]
-        send_progress(f"Cleaned mesh: {face_num} faces, target: {target_count}", 20, print_to_console=True)
-        
-        # 如果面数超过目标，进行简化
-        if face_num > target_count:
-            send_progress(f"Simplifying mesh from {face_num} to {target_count} faces...", 70, print_to_console=True)
-            mesh = mesh.simplify_quadric_decimation(face_count=target_count)            
-            # 清理mesh
-            mesh = self.clean_mesh(mesh)
-            send_progress(f"Mesh simplified to {mesh.faces.shape[0]} faces", 90, print_to_console=True)
-        
-        # 保存 remesh 后的 mesh 到临时目录
-        output_dir = os.path.join(folder_paths.get_output_directory(), "hunyuan3d_temp")
-        os.makedirs(output_dir, exist_ok=True)
-        mesh_remesh_path = os.path.join(output_dir, "input_mesh_remeshed.obj")
-        
-        # 使用 save_obj_mesh 保存（仅顶点和法线，无UV和纹理）
+    def save_mesh_as_obj(self, mesh, save_path):
+        """将 trimesh 对象保存为 OBJ 文件（仅顶点、面和法线，无UV和纹理）"""
         from hy3dpaint.DifferentiableRenderer.mesh_utils import save_obj_mesh
-        
-        # 确保有顶点法线
+
         if not hasattr(mesh, 'vertex_normals') or mesh.vertex_normals is None:
             mesh.compute_vertex_normals()
-        
+
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
         save_obj_mesh(
-            mesh_path=mesh_remesh_path,
+            mesh_path=save_path,
             vtx_pos=mesh.vertices,
             pos_idx=mesh.faces,
             vtx_normal=mesh.vertex_normals
         )
+
+    def remesh(self, mesh, target_count):
+        import trimesh
+
+        send_progress("Remeshing mesh...", 5)
+
+        # 确保是 Trimesh 对象
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+
+        original_face_num = mesh.faces.shape[0]
+        send_progress(f"Original mesh: {original_face_num} faces", 10, print_to_console=True)
+
+        # 清理mesh
+        mesh = self.clean_mesh(mesh)
+        face_num = mesh.faces.shape[0]
+        send_progress(f"Cleaned mesh: {face_num} faces, target: {target_count}", 20, print_to_console=True)
+
+        # 如果面数超过目标，进行简化
+        if face_num > target_count:
+            send_progress(f"Simplifying mesh from {face_num} to {target_count} faces...", 70, print_to_console=True)
+            mesh = mesh.simplify_quadric_decimation(face_count=target_count)
+            mesh = self.clean_mesh(mesh)
+            send_progress(f"Mesh simplified to {mesh.faces.shape[0]} faces", 90, print_to_console=True)
+
+        # 保存 remesh 后的 mesh 到临时目录
+        mesh_remesh_path = os.path.join(
+            folder_paths.get_output_directory(), "hunyuan3d_temp", "remeshed.obj"
+        )
+        self.save_mesh_as_obj(mesh, mesh_remesh_path)
         send_progress(f"Saved remeshed mesh to: {mesh_remesh_path}", 100, print_to_console=True)
-        
+
         return (mesh,)
+
+
+class BlenderMeshProcessor:
+    """
+    Blender 网格处理器 - 使用独立 bpy 环境进行 AutoSmooth 和 UV 展开
+    
+    该节点通过子进程调用独立 Python 3.11 + bpy 环境，提供 Blender 独有的网格处理功能：
+    - AutoSmooth: 基于角度阈值的自动平滑着色
+    - UV 展开: Smart Project / Lightmap Pack / Cube Project
+    
+    使用前需要先创建 bpy 环境，详见 SETUP_BPY.md
+    """
+    
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mesh": ("TRIMESH",),
+                "auto_smooth_angle": ("FLOAT", {
+                    "default": 30.0, 
+                    "min": 0.0, 
+                    "max": 180.0,
+                    "step": 1.0,
+                    "display": "number"
+                }),
+                "enable_uv_unwrap": ("BOOLEAN", {"default": False}),
+                "uv_method": (["smart_project", "lightmap_pack", "cube_project"], {
+                    "default": "smart_project"
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("TRIMESH",)
+    RETURN_NAMES = ("mesh",)
+    FUNCTION = "process"
+    CATEGORY = "Hunyuan3D-2.1"
+
+    def process(self, mesh, auto_smooth_angle, enable_uv_unwrap, uv_method):
+        from bpy_processor import BpyBridge, BpyProcessingError
+        import trimesh
+
+        send_progress("Initializing Blender mesh processor...", 5, print_to_console=True)
+
+        # 确保是 Trimesh 对象
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+
+        bridge = BpyBridge()
+
+        send_progress(f"Using bpy version: {'.'.join(map(str, bridge.get_bpy_version() or (0, 0, 0)))}", 10, print_to_console=True)
+        
+        # 确定 UV 方法
+        actual_uv_method = uv_method if enable_uv_unwrap else 'none'
+        
+        send_progress(f"Processing: AutoSmooth={auto_smooth_angle}°, UV={actual_uv_method}", 20, print_to_console=True)
+        
+        try:
+            # 调用 bpy 处理
+            result_mesh, temp_obj_path = bridge.process_mesh(
+                mesh=mesh,
+                auto_smooth_angle=auto_smooth_angle,
+                uv_method=actual_uv_method
+            )
+
+            send_progress(f"Blender processing complete. Vertices: {len(result_mesh.vertices)}, Faces: {len(result_mesh.faces)}", 100, print_to_console=True)
+
+            processed_path = os.path.join(
+                folder_paths.get_output_directory(), "hunyuan3d_temp", "blender_processed.obj"
+            )
+            os.makedirs(os.path.dirname(processed_path), exist_ok=True)
+            shutil.copy2(temp_obj_path, processed_path)
+            os.unlink(temp_obj_path)
+
+            return (result_mesh,)
+            
+        except BpyProcessingError as e:
+            raise RuntimeError(f"Blender mesh processing failed: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error during Blender processing: {e}")
