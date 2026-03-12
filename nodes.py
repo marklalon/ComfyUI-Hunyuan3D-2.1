@@ -105,11 +105,19 @@ class Hunyuan3DShapeGeneration:
         
         send_progress("Running shape generation model...", 10)
         trimesh_mesh = shape_pipeline(
-            image=pil_image, 
+            image=pil_image,
             callback=diffusion_callback,
             callback_steps=1,
             volume_decode_callback=volume_decode_callback
         )[0]
+
+        # 生成完成后将模型移至 CPU 并释放显存，为后续 texture synthesis 腾出空间
+        send_progress("Offloading shape model from GPU...", 92)
+        try:
+            shape_pipeline.to("cpu")
+        except Exception:
+            pass
+        torch.cuda.empty_cache()
 
         # 保存 mesh 到 ComfyUI output/hunyuan3d_temp 目录
         send_progress("Preparing to save mesh...", 95)
