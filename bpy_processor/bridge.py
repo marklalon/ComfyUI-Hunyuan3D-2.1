@@ -109,7 +109,8 @@ class BpyBridge:
         self,
         mesh: trimesh.Trimesh,
         auto_smooth_angle: float = 30.0,
-        uv_method: str = 'none'
+        uv_method: str = 'none',
+        decimate_ratio: float = 1.0
     ) -> Tuple[trimesh.Trimesh, str]:
         """
         Process a mesh using bpy operations.
@@ -119,6 +120,7 @@ class BpyBridge:
             auto_smooth_angle: Auto smooth angle in degrees (0-180).
             uv_method: UV unwrap method ('smart_project', 'lightmap_pack',
                       'cube_project', or 'none').
+            decimate_ratio: Decimate ratio (0.0-1.0, 1.0 = no decimation).
 
         Returns:
             Tuple of (processed trimesh, path to the output OBJ file).
@@ -167,7 +169,8 @@ class BpyBridge:
                 temp_input,
                 temp_output,
                 '--auto-smooth', str(auto_smooth_angle),
-                '--uv-method', uv_method
+                '--uv-method', uv_method,
+                '--decimate-ratio', str(decimate_ratio)
             ]
             
             # Run subprocess

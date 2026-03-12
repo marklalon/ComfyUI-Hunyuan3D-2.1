@@ -116,6 +116,26 @@ def apply_uv_unwrap(method: str) -> bool:
     return True
 
 
+def apply_decimate(ratio: float) -> bool:
+    """Apply Decimate modifier to reduce polygon count."""
+    import bpy
+
+    obj = bpy.context.active_object
+    if obj is None or obj.type != 'MESH':
+        return False
+
+    if obj.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    mod = obj.modifiers.new(name='Decimate', type='DECIMATE')
+    mod.decimate_type = 'COLLAPSE'
+    mod.ratio = max(0.0, min(1.0, ratio))
+
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+
+    return True
+
+
 def export_obj(output_path: str) -> bool:
     """Export the active mesh to OBJ file (built-in since Blender 4.0)."""
     import bpy
@@ -153,6 +173,8 @@ def main():
     parser.add_argument('--uv-method', default='none',
                         choices=['smart_project', 'lightmap_pack', 'cube_project', 'none'],
                         help='UV unwrap method')
+    parser.add_argument('--decimate-ratio', type=float, default=1.0,
+                        help='Decimate ratio (0.0-1.0, 1.0 = no decimation)')
 
     args = parser.parse_args()
 
@@ -162,6 +184,11 @@ def main():
 
     if not setup_blender_scene(args.input_obj):
         sys.exit(1)
+
+    if args.decimate_ratio < 1.0:
+        if not apply_decimate(args.decimate_ratio):
+            print("ERROR: Failed to apply decimate modifier", file=sys.stderr)
+            sys.exit(1)
 
     if args.auto_smooth > 0:
         if not apply_auto_smooth(args.auto_smooth):
