@@ -284,8 +284,8 @@ class ConvertToGLB:
         
         # 调用 create_glb_with_pbr_materials
         create_glb_with_pbr_materials(mesh, textures_dict, glb_path)
-        
-        return (glb_path,)
+
+        return {"ui": {"files": [{"filename": glb_filename, "subfolder": subfolder, "type": "output"}]}, "result": (glb_path,)}
 
 
 class RemeshMesh:
