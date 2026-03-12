@@ -32,8 +32,15 @@ from diffusers.utils import logging as diffusers_logging
 diffusers_logging.set_verbosity(50)
 
 
+RESOLUTION_PRESETS = {
+    "default": 512,
+    "high": 768,
+    "ultra": 1024,
+}
+
+
 class Hunyuan3DPaintConfig:
-    def __init__(self, texture_size=2048):
+    def __init__(self, texture_size=2048, quality_preset="default"):
         self.device = "cuda"
 
         _hy3dpaint_dir = os.path.dirname(__file__)
@@ -52,7 +59,7 @@ class Hunyuan3DPaintConfig:
         self.render_size = 2048
         self.texture_size = texture_size
         self.max_selected_view_num = 6
-        self.resolution = 512
+        self.resolution = RESOLUTION_PRESETS.get(quality_preset, 512)
         self.bake_exp = 4
         self.merge_method = "fast"
 
