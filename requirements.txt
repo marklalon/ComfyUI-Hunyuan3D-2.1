@@ -52,9 +52,6 @@ psutil>=6.0.0
 # GPU Computing (requires CUDA)
 cupy-cuda12x>=13.4.1
 
-# Blender (bpy not available on PyPI for Python 3.12+, install separately if needed)
-# bpy>=4.0
-
 # ONNX Runtime
 onnxruntime>=1.16.3
 torchmetrics>=1.6.0

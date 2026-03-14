@@ -141,7 +141,7 @@ class Hunyuan3DTexureSynthsis:
                 "image": ("IMAGE",),
                 "mesh": ("TRIMESH",),
                 "texture_size": ("INT", {"default": 2048, "min": 512, "max": 4096}),
-                "quality_preset": (["default", "high", "ultra"], {"default": "default"}),
+                "resolution": ("INT", {"default": 512, "min": 256, "max": 1024}),
             }
         }
 
@@ -150,12 +150,12 @@ class Hunyuan3DTexureSynthsis:
     FUNCTION = "generate"
     CATEGORY = "Hunyuan3D-2.1"
 
-    def generate(self, image, mesh, texture_size, quality_preset):
+    def generate(self, image, mesh, texture_size, resolution):
         import trimesh
         from hy3dpaint.textureGenPipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintConfig
 
         send_progress("Initializing texture synthesis pipeline...", 5)
-        paint_pipeline = Hunyuan3DPaintPipeline(Hunyuan3DPaintConfig(texture_size=texture_size, quality_preset=quality_preset))
+        paint_pipeline = Hunyuan3DPaintPipeline(Hunyuan3DPaintConfig(texture_size=texture_size, resolution=resolution))
         
         send_progress("Preparing image input...", 10)
         pil_image = tensor_to_pil(image)
