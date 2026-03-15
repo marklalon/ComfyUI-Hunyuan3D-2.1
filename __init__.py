@@ -18,7 +18,7 @@ sys.path.insert(0, _this_dir)
 sys.path.insert(0, os.path.join(_this_dir, "hy3dpaint"))
 sys.path.insert(0, os.path.join(_this_dir, "hy3dshape"))
 
-from .nodes import LoadHunyuan3DModel, Hunyuan3DShapeGeneration, Hunyuan3DTexureSynthsis, Load3DMesh, ConvertToGLB, BlenderMeshProcessor, BlenderFixUVSeams
+from .nodes import LoadHunyuan3DModel, Hunyuan3DShapeGeneration, Hunyuan3DTexureSynthsis, Load3DMesh, ConvertToGLB, BlenderMeshProcessor
 
 NODE_CLASS_MAPPINGS = {
     "LoadHunyuan3DModel": LoadHunyuan3DModel,
@@ -27,7 +27,6 @@ NODE_CLASS_MAPPINGS = {
     "Load3DMesh": Load3DMesh,
     "ConvertToGLB": ConvertToGLB,
     "BlenderMeshProcessor": BlenderMeshProcessor,
-    "BlenderFixUVSeams": BlenderFixUVSeams,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -37,7 +36,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Load3DMesh": "Load 3D Mesh (OBJ/GLB/STL...)",
     "ConvertToGLB": "Convert to GLB",
     "BlenderMeshProcessor": "Blender Mesh Processor (AutoSmooth + Decimate)",
-    "BlenderFixUVSeams": "Blender Fix UV Seams",
 } 
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']

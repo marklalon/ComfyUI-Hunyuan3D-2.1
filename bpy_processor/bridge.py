@@ -12,7 +12,7 @@ Usage:
     result_mesh = bridge.process_mesh(
         mesh=input_trimesh,
         auto_smooth_angle=30.0,
-        uv_method='smart_project'
+        decimate_ratio=1.0
     )
 """
 
@@ -122,9 +122,10 @@ class BpyBridge:
         """
         mesh = trimesh.load(mesh_path, force='mesh', process=False)
         
-        # Handle Scene objects
+        # Handle Scene objects, preserving file normals
         if isinstance(mesh, trimesh.Scene):
-            mesh = mesh.dump(concatenate=True)
+            from hy3dpaint.convert_utils import scene_dump_with_normals
+            mesh = scene_dump_with_normals(mesh)
         
         # Ensure vertex normals exist (trimesh should load them from GLB, but verify)
         if not hasattr(mesh, 'vertex_normals') or mesh.vertex_normals is None or len(mesh.vertex_normals) == 0:
@@ -137,17 +138,17 @@ class BpyBridge:
         self,
         mesh: trimesh.Trimesh,
         auto_smooth_angle: float = 30.0,
-        uv_method: str = 'none',
-        decimate_ratio: float = 1.0
+        decimate_ratio: float = 1.0,
     ) -> Tuple[trimesh.Trimesh, str]:
         """
         Process a mesh using bpy operations.
 
+        UV-split vertices are always merged before any processing (required for
+        correct auto smooth and decimate results).
+
         Args:
             mesh: Input trimesh object.
             auto_smooth_angle: Auto smooth angle in degrees (0-180).
-            uv_method: UV unwrap method ('smart_project', 'lightmap_pack',
-                      'cube_project', or 'none').
             decimate_ratio: Decimate ratio (0.0-1.0, 1.0 = no decimation).
 
         Returns:
@@ -197,8 +198,7 @@ class BpyBridge:
                 temp_input,
                 temp_output,
                 '--auto-smooth', str(auto_smooth_angle),
-                '--uv-method', uv_method,
-                '--decimate-ratio', str(decimate_ratio)
+                '--decimate-ratio', str(decimate_ratio),
             ]
             
             # Run subprocess
@@ -229,108 +229,6 @@ class BpyBridge:
         except subprocess.TimeoutExpired:
             raise BpyProcessingError(
                 "bpy processing timed out after 300 seconds"
-            )
-        except subprocess.SubprocessError as e:
-            raise BpyProcessingError(f"Subprocess error: {e}")
-        finally:
-            # Only clean up input; output is returned to caller for copying
-            if temp_input and os.path.exists(temp_input):
-                try:
-                    os.unlink(temp_input)
-                except OSError:
-                    pass
-
-    def fix_uv_seams(
-        self,
-        mesh: trimesh.Trimesh
-    ) -> Tuple[trimesh.Trimesh, str]:
-        """
-        Fix UV seams by clearing custom split normals and removing doubles.
-
-        This operation is useful for meshes that have:
-        - Shading artifacts from hard edges
-        - Duplicate vertices at UV seams
-
-        Args:
-            mesh: Input trimesh object.
-
-        Returns:
-            Tuple of (processed trimesh, path to the output GLB file).
-            The caller is responsible for deleting the GLB file when done.
-
-        Raises:
-            BpyProcessingError: If processing fails.
-        """
-        # Handle trimesh Scene by concatenating all meshes
-        if isinstance(mesh, trimesh.Scene):
-            mesh = mesh.dump(concatenate=True)
-        
-        # Find bpy_worker.py (in the same directory as this file)
-        worker_script = Path(__file__).parent / "worker.py"
-        if not worker_script.exists():
-            raise BpyProcessingError(f"worker.py not found at {worker_script}")
-        
-        # Create temporary files for input and output
-        temp_input = None
-        temp_output = None
-        
-        try:
-            # Create input temp file (GLB format)
-            with tempfile.NamedTemporaryFile(
-                suffix='.glb', 
-                delete=False,
-                prefix='bpy_input_'
-            ) as f:
-                temp_input = f.name
-            
-            # Create output temp file (GLB format - preserves normals and UV)
-            with tempfile.NamedTemporaryFile(
-                suffix='.glb', 
-                delete=False,
-                prefix='bpy_output_'
-            ) as f:
-                temp_output = f.name
-            
-            # Export mesh to temp GLB
-            mesh.export(temp_input, file_type='glb')
-            
-            # Build subprocess command
-            cmd = [
-                self._python_exe,
-                str(worker_script),
-                temp_input,
-                temp_output,
-                '--fix-uv-seams',
-            ]
-            
-            # Run subprocess
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 minute timeout
-            )
-            
-            if result.returncode != 0:
-                error_msg = result.stderr.strip() or result.stdout.strip()
-                raise BpyProcessingError(
-                    f"bpy fix_uv_seams failed: {error_msg}"
-                )
-            
-            # Load processed mesh
-            if not os.path.exists(temp_output):
-                raise BpyProcessingError(
-                    "bpy fix_uv_seams failed: output file not created"
-                )
-            
-            # GLB format preserves normals and UV correctly
-            result_mesh = self._load_mesh(temp_output)
-
-            return result_mesh, temp_output
-
-        except subprocess.TimeoutExpired:
-            raise BpyProcessingError(
-                "bpy fix_uv_seams timed out after 300 seconds"
             )
         except subprocess.SubprocessError as e:
             raise BpyProcessingError(f"Subprocess error: {e}")
