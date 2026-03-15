@@ -26,6 +26,46 @@ from pathlib import Path
 import trimesh
 
 
+def load_trimesh(mesh_path: str, log_info: bool = False):
+    """
+    加载 mesh 文件并返回 trimesh 对象。
+    
+    Args:
+        mesh_path: mesh 文件路径 (OBJ/GLB/GLTF/STL/PLY/OFF)
+        log_info: 如果为 True，打印加载信息
+        
+    Returns:
+        trimesh.Trimesh 对象
+        
+    Raises:
+        FileNotFoundError: 文件不存在
+    """
+    if not os.path.isfile(mesh_path):
+        raise FileNotFoundError(f"Mesh file not found: {mesh_path}")
+    
+    # Load mesh with process=False to preserve split vertices at UV seams.
+    # Default process=True merges vertices at the same position, which destroys
+    # per-vertex normals at UV seams (where vertices share position but differ in UV/normal).
+    mesh = trimesh.load(mesh_path, process=False)
+    
+    # Handle Scene objects by concatenating all meshes, preserving file normals
+    if isinstance(mesh, trimesh.Scene):
+        from hy3dpaint.convert_utils import scene_dump_with_normals
+        mesh = scene_dump_with_normals(mesh)
+    
+    # Ensure vertex normals exist (compute if missing)
+    if not hasattr(mesh, 'vertex_normals') or mesh.vertex_normals is None or len(mesh.vertex_normals) == 0:
+        if log_info:
+            print(f"[load_trimesh] No vertex normals found, computing...")
+        mesh.compute_vertex_normals()
+    
+    if log_info:
+        has_uv = hasattr(mesh, 'visual') and hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None and len(mesh.visual.uv) > 0
+        print(f"[load_trimesh] Loaded: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces, UV: {has_uv}")
+    
+    return mesh
+
+
 class BpyEnvironmentError(Exception):
     """Raised when the bpy environment is not properly configured."""
     pass
@@ -104,35 +144,6 @@ class BpyBridge:
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, ValueError):
             pass
         return None
-
-    def _load_mesh(self, mesh_path: str) -> trimesh.Trimesh:
-        """
-        Load mesh file (GLB or OBJ) and return as trimesh.
-        
-        GLB format is preferred as it properly preserves:
-        - Vertex normals (including hard edges via vertex splitting)
-        - UV coordinates
-        - Materials
-        
-        Args:
-            mesh_path: Path to the mesh file (GLB or OBJ).
-            
-        Returns:
-            trimesh.Trimesh with normals preserved.
-        """
-        mesh = trimesh.load(mesh_path, force='mesh', process=False)
-        
-        # Handle Scene objects, preserving file normals
-        if isinstance(mesh, trimesh.Scene):
-            from hy3dpaint.convert_utils import scene_dump_with_normals
-            mesh = scene_dump_with_normals(mesh)
-        
-        # Ensure vertex normals exist (trimesh should load them from GLB, but verify)
-        if not hasattr(mesh, 'vertex_normals') or mesh.vertex_normals is None or len(mesh.vertex_normals) == 0:
-            print(f"[BpyBridge] Warning: No vertex normals found in {mesh_path}, computing...")
-            mesh.compute_vertex_normals()
-
-        return mesh
 
     def process_mesh(
         self,
@@ -222,7 +233,7 @@ class BpyBridge:
                 )
             
             # GLB format preserves normals and UV correctly
-            result_mesh = self._load_mesh(temp_output)
+            result_mesh = load_trimesh(temp_output, log_info=True)
 
             return result_mesh, temp_output
 

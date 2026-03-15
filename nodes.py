@@ -226,17 +226,17 @@ class Load3DMesh:
         if ext not in self.SUPPORTED_EXTENSIONS:
             raise ValueError(f"Unsupported format '{ext}'. Supported: {', '.join(self.SUPPORTED_EXTENSIONS)}")
 
-        import trimesh
-        
-        # Load mesh with process=False to preserve split vertices at UV seams.
-        # Default process=True merges vertices at the same position, which destroys
-        # per-vertex normals at UV seams (where vertices share position but differ in UV/normal).
         mesh = trimesh.load(mesh_path, process=False)
         
         # Handle Scene objects by concatenating all meshes, preserving file normals
         if isinstance(mesh, trimesh.Scene):
             from hy3dpaint.convert_utils import scene_dump_with_normals
             mesh = scene_dump_with_normals(mesh)
+        
+        # Ensure vertex normals exist (compute if missing)
+        if not hasattr(mesh, 'vertex_normals') or mesh.vertex_normals is None or len(mesh.vertex_normals) == 0:
+            send_progress(f"[Load3DMesh] No vertex normals found, computing...", print_to_console=True)
+            mesh.compute_vertex_normals()
         
         # Log UV status
         has_uv = hasattr(mesh, 'visual') and hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None and len(mesh.visual.uv) > 0
