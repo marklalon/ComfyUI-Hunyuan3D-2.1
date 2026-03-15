@@ -396,3 +396,67 @@ class BlenderMeshProcessor:
             raise RuntimeError(f"Blender mesh processing failed: {e}")
         except Exception as e:
             raise RuntimeError(f"Unexpected error during Blender processing: {e}")
+
+
+class BlenderFixUVSeams:
+    """
+    Blender UV 接缝修复器 - 清理硬边数据并合并重复顶点
+
+    该节点通过子进程调用独立 Python 3.11 + bpy 环境，修复网格的 UV 接缝问题：
+    - 清除 custom split normals（移除硬边着色数据）
+    - 移除重复顶点（合并相同位置的顶点）
+
+    适用于：
+    - 从其他软件导入的有着色瑕疵的网格
+    - UV 接缝处有不正常硬边的网格
+    - 存在重复顶点导致渲染问题的网格
+    """
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mesh": ("TRIMESH",),
+            }
+        }
+
+    RETURN_TYPES = ("TRIMESH",)
+    RETURN_NAMES = ("mesh",)
+    FUNCTION = "process"
+    CATEGORY = "Hunyuan3D-2.1"
+
+    def process(self, mesh):
+        from bpy_processor import BpyBridge, BpyProcessingError
+        import trimesh
+
+        send_progress("Initializing Blender UV seam fixer...", 5, print_to_console=True)
+
+        # 确保是 Trimesh 对象
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+
+        bridge = BpyBridge()
+
+        send_progress(f"Using bpy version: {'.'.join(map(str, bridge.get_bpy_version() or (0, 0, 0)))}", 10, print_to_console=True)
+
+        send_progress("Processing: Fix UV Seams", 20, print_to_console=True)
+
+        try:
+            # 调用 bpy 处理
+            result_mesh, temp_glb_path = bridge.fix_uv_seams(mesh=mesh)
+
+            send_progress(f"UV seam fix complete. Vertices: {len(result_mesh.vertices)}, Faces: {len(result_mesh.faces)}", 100, print_to_console=True)
+
+            processed_path = os.path.join(
+                folder_paths.get_output_directory(), "hunyuan3d_temp", "uv_seam_fixed.glb"
+            )
+            os.makedirs(os.path.dirname(processed_path), exist_ok=True)
+            shutil.copy2(temp_glb_path, processed_path)
+            os.unlink(temp_glb_path)
+
+            return (result_mesh,)
+
+        except BpyProcessingError as e:
+            raise RuntimeError(f"Blender UV seam fix failed: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error during UV seam fix: {e}")

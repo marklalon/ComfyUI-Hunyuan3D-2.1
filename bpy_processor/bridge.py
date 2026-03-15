@@ -240,6 +240,108 @@ class BpyBridge:
                 except OSError:
                     pass
 
+    def fix_uv_seams(
+        self,
+        mesh: trimesh.Trimesh
+    ) -> Tuple[trimesh.Trimesh, str]:
+        """
+        Fix UV seams by clearing custom split normals and removing doubles.
+
+        This operation is useful for meshes that have:
+        - Shading artifacts from hard edges
+        - Duplicate vertices at UV seams
+
+        Args:
+            mesh: Input trimesh object.
+
+        Returns:
+            Tuple of (processed trimesh, path to the output GLB file).
+            The caller is responsible for deleting the GLB file when done.
+
+        Raises:
+            BpyProcessingError: If processing fails.
+        """
+        # Handle trimesh Scene by concatenating all meshes
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+        
+        # Find bpy_worker.py (in the same directory as this file)
+        worker_script = Path(__file__).parent / "worker.py"
+        if not worker_script.exists():
+            raise BpyProcessingError(f"worker.py not found at {worker_script}")
+        
+        # Create temporary files for input and output
+        temp_input = None
+        temp_output = None
+        
+        try:
+            # Create input temp file (GLB format)
+            with tempfile.NamedTemporaryFile(
+                suffix='.glb', 
+                delete=False,
+                prefix='bpy_input_'
+            ) as f:
+                temp_input = f.name
+            
+            # Create output temp file (GLB format - preserves normals and UV)
+            with tempfile.NamedTemporaryFile(
+                suffix='.glb', 
+                delete=False,
+                prefix='bpy_output_'
+            ) as f:
+                temp_output = f.name
+            
+            # Export mesh to temp GLB
+            mesh.export(temp_input, file_type='glb')
+            
+            # Build subprocess command
+            cmd = [
+                self._python_exe,
+                str(worker_script),
+                temp_input,
+                temp_output,
+                '--fix-uv-seams',
+            ]
+            
+            # Run subprocess
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            
+            if result.returncode != 0:
+                error_msg = result.stderr.strip() or result.stdout.strip()
+                raise BpyProcessingError(
+                    f"bpy fix_uv_seams failed: {error_msg}"
+                )
+            
+            # Load processed mesh
+            if not os.path.exists(temp_output):
+                raise BpyProcessingError(
+                    "bpy fix_uv_seams failed: output file not created"
+                )
+            
+            # GLB format preserves normals and UV correctly
+            result_mesh = self._load_mesh(temp_output)
+
+            return result_mesh, temp_output
+
+        except subprocess.TimeoutExpired:
+            raise BpyProcessingError(
+                "bpy fix_uv_seams timed out after 300 seconds"
+            )
+        except subprocess.SubprocessError as e:
+            raise BpyProcessingError(f"Subprocess error: {e}")
+        finally:
+            # Only clean up input; output is returned to caller for copying
+            if temp_input and os.path.exists(temp_input):
+                try:
+                    os.unlink(temp_input)
+                except OSError:
+                    pass
+
 
 # Module-level singleton for convenience
 _bpy_bridge_instance: Optional[BpyBridge] = None

@@ -146,6 +146,41 @@ def apply_decimate(ratio: float) -> bool:
     return True
 
 
+def fix_uv_seams() -> bool:
+    """
+    Fix UV seams by clearing custom split normals and removing doubles.
+    
+    This operation:
+    1. Clears custom split normals (fixes shading artifacts from hard edges)
+    2. Removes duplicate vertices (merges vertices at same position)
+    """
+    import bpy
+
+    obj = bpy.context.active_object
+    if obj is None or obj.type != 'MESH':
+        return False
+
+    if obj.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    bpy.ops.object.select_all(action='SELECT')
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+
+    # Clear custom split normals - removes hard edge shading data
+    try:
+        bpy.ops.mesh.customdata_custom_splitnormals_clear()
+    except Exception as e:
+        print(f"Warning: Could not clear custom split normals: {e}", file=sys.stderr)
+
+    # Remove duplicate vertices with very small threshold
+    bpy.ops.mesh.remove_doubles(threshold=0.0001)
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    return True
+
+
 def export_obj(output_path: str) -> bool:
     """Export the active mesh to OBJ file (built-in since Blender 4.0)."""
     import bpy
@@ -214,6 +249,8 @@ def main():
                         help='UV unwrap method')
     parser.add_argument('--decimate-ratio', type=float, default=1.0,
                         help='Decimate ratio (0.0-1.0, 1.0 = no decimation)')
+    parser.add_argument('--fix-uv-seams', action='store_true',
+                        help='Fix UV seams by clearing custom split normals and removing doubles')
 
     args = parser.parse_args()
 
@@ -223,6 +260,11 @@ def main():
 
     if not setup_blender_scene(args.input_mesh):
         sys.exit(1)
+
+    if args.fix_uv_seams:
+        if not fix_uv_seams():
+            print("ERROR: Failed to fix UV seams", file=sys.stderr)
+            sys.exit(1)
 
     if args.decimate_ratio < 1.0:
         if not apply_decimate(args.decimate_ratio):
