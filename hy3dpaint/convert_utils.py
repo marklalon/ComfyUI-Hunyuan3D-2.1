@@ -3,8 +3,41 @@ import trimesh
 import pygltflib
 import numpy as np
 from PIL import Image
-import base64
 import io
+
+
+def scene_dump_with_normals(scene: trimesh.Scene) -> trimesh.Trimesh:
+    """
+    等同于 scene.dump(concatenate=True)，但保留各 geometry 中文件的原始法线。
+
+    问题根因：dump() 内部调用 geometry.copy(include_cache=False)，清空了从
+    NORMAL accessor 缓存的法线。后续 concatenate() 因缓存为空传入 vertex_normals=None，
+    导致 mesh.vertex_normals 在每次访问时从面法线重新计算，在 UV 接缝处产生差异。
+
+    修复：在 dump 前按 scene.graph.nodes_geometry 顺序收集各 geometry 的法线，
+    对法线应用对应节点的旋转变换，dump 后恢复到合并后的 mesh 上。
+    """
+    ordered_normals = []
+    for node_name in scene.graph.nodes_geometry:
+        T, geom_name = scene.graph[node_name]
+        geom = scene.geometry[geom_name]
+        vn = np.array(geom.vertex_normals)  # cache 有效，返回文件法线
+        # 对法线应用变换矩阵的旋转部分（inverse transpose）
+        R = np.array(T[:3, :3], dtype=np.float64)
+        normal_T = np.linalg.inv(R).T
+        vn_t = (normal_T @ vn.T).T
+        norms = np.linalg.norm(vn_t, axis=1, keepdims=True)
+        norms[norms < 1e-8] = 1.0
+        ordered_normals.append(vn_t / norms)
+
+    mesh = scene.dump(concatenate=True)
+
+    if ordered_normals:
+        combined = np.vstack(ordered_normals)
+        if len(combined) == len(mesh.vertices):
+            mesh.vertex_normals = combined
+
+    return mesh
 
 
 def extract_texture_from_mesh(mesh):
@@ -130,11 +163,11 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
     """
     # 1. 加载mesh
     if isinstance(mesh, str):
-        mesh = trimesh.load(mesh, force='mesh')
-    
-    # Handle trimesh Scene (concatenate all meshes)
+        mesh = trimesh.load(mesh, force='mesh', process=False)
+
+    # Handle trimesh Scene (concatenate all meshes), preserving file normals
     if isinstance(mesh, trimesh.Scene):
-        mesh = mesh.dump(concatenate=True)
+        mesh = scene_dump_with_normals(mesh)
 
     # Get mesh data
     vertices = mesh.vertices.astype(np.float32)
@@ -181,9 +214,7 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
     index_byte_offset = len(binary)
     index_buffer = faces.tobytes()
     binary.extend(index_buffer)
-    
-    total_byte_length = len(binary)
-    
+
     # Create buffer views
     buffer_views = []
     
@@ -265,20 +296,19 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
         type="SCALAR"
     ))
     
-    # 3. Prepare textures
-    def image_to_data_uri(image):
-        """将图像(PIL Image或路径)转换为data URI"""
+    # 3. Prepare textures - embed image bytes directly into binary blob
+    def image_to_bytes(image):
+        """Convert PIL Image or file path to raw bytes and mime type."""
         if isinstance(image, str):
             with open(image, "rb") as f:
-                image_data = f.read()
+                data = f.read()
             mime = mimetypes.guess_type(image)[0] or "image/png"
         else:
-            buffer = io.BytesIO()
-            image.save(buffer, format="PNG")
-            image_data = buffer.getvalue()
+            buf = io.BytesIO()
+            image.save(buf, format="PNG")
+            data = buf.getvalue()
             mime = "image/png"
-        encoded = base64.b64encode(image_data).decode()
-        return f"data:{mime};base64,{encoded}"
+        return data, mime
 
     # 合并metallic和roughness
     if "metallic" in textures_dict and "roughness" in textures_dict:
@@ -286,8 +316,7 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
         textures_dict = dict(textures_dict)
         textures_dict["metallicRoughness"] = mr_combined
 
-    # 按固定顺序添加图像到GLTF，并记录每种纹理对应的索引
-    # 固定顺序确保 tex_type_to_index 与材质赋值保持一致
+    # 按固定顺序将图片字节追加到 binary blob，创建对应的 BufferView
     TEXTURE_ORDER = ("albedo", "metallicRoughness", "normal", "ao")
     images = []
     textures = []
@@ -296,9 +325,22 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
     for tex_type in TEXTURE_ORDER:
         tex_value = textures_dict.get(tex_type)
         if tex_value:
-            tex_type_to_index[tex_type] = len(images)
-            images.append(pygltflib.Image(uri=image_to_data_uri(tex_value)))
+            img_bytes, mime = image_to_bytes(tex_value)
+            # GLB binary blob 要求每个 chunk 4 字节对齐
+            pad = (4 - len(binary) % 4) % 4
+            binary.extend(b'\x00' * pad)
+            img_bv_index = len(buffer_views)
+            buffer_views.append(BufferView(
+                buffer=0,
+                byteOffset=len(binary),
+                byteLength=len(img_bytes),
+            ))
+            binary.extend(img_bytes)
+            tex_type_to_index[tex_type] = len(textures)
+            images.append(pygltflib.Image(bufferView=img_bv_index, mimeType=mime))
             textures.append(pygltflib.Texture(source=len(images) - 1))
+
+    total_byte_length = len(binary)
 
     # 4. Create PBR material
     pbr_metallic_roughness = pygltflib.PbrMetallicRoughness(
@@ -355,12 +397,9 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
         textures=textures
     )
     
-    # Set binary data
+    # Set binary data (includes mesh buffers + embedded image bytes)
     gltf.set_binary_blob(bytes(binary))
-    
-    # Convert images to buffer views
-    gltf.convert_images(pygltflib.ImageFormat.BUFFERVIEW)
-    
+
     # 8. Save GLB
     gltf.save(output_path)
     print(f"PBR GLB文件已保存: {output_path}")

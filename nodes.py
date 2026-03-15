@@ -194,7 +194,7 @@ class Hunyuan3DTexureSynthsis:
 
         # 加载输出的 mesh (trimesh 对象，保留 UV 和材质信息)
         send_progress("Loading textured mesh...", 95)
-        mesh_textured = trimesh.load(mesh_textured_path, force="mesh")
+        mesh_textured = trimesh.load(mesh_textured_path, force="mesh", process=False)
         
         send_progress("Texture synthesis complete!", 100)
 
@@ -228,20 +228,15 @@ class Load3DMesh:
 
         import trimesh
         
-        # Load mesh - trimesh.load() preserves normals and UV for GLB/OBJ
-        mesh = trimesh.load(mesh_path)
+        # Load mesh with process=False to preserve split vertices at UV seams.
+        # Default process=True merges vertices at the same position, which destroys
+        # per-vertex normals at UV seams (where vertices share position but differ in UV/normal).
+        mesh = trimesh.load(mesh_path, process=False)
         
-        # Handle Scene objects by concatenating all meshes
+        # Handle Scene objects by concatenating all meshes, preserving file normals
         if isinstance(mesh, trimesh.Scene):
-            mesh = mesh.dump(concatenate=True)
-        
-        # Ensure vertex normals exist
-        # GLB/GLTF: normals are preserved from file
-        # OBJ: normals may or may not be in file, trimesh handles this
-        # STL/PLY/OFF: usually no normals, need to compute
-        if not hasattr(mesh, 'vertex_normals') or mesh.vertex_normals is None or len(mesh.vertex_normals) == 0:
-            send_progress(f"[Load3DMesh] No vertex normals found, computing...", print_to_console=True)
-            mesh.compute_vertex_normals()
+            from hy3dpaint.convert_utils import scene_dump_with_normals
+            mesh = scene_dump_with_normals(mesh)
         
         # Log UV status
         has_uv = hasattr(mesh, 'visual') and hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None and len(mesh.visual.uv) > 0

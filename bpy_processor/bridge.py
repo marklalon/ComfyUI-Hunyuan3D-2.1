@@ -120,7 +120,7 @@ class BpyBridge:
         Returns:
             trimesh.Trimesh with normals preserved.
         """
-        mesh = trimesh.load(mesh_path, force='mesh')
+        mesh = trimesh.load(mesh_path, force='mesh', process=False)
         
         # Handle Scene objects
         if isinstance(mesh, trimesh.Scene):
@@ -130,7 +130,7 @@ class BpyBridge:
         if not hasattr(mesh, 'vertex_normals') or mesh.vertex_normals is None or len(mesh.vertex_normals) == 0:
             print(f"[BpyBridge] Warning: No vertex normals found in {mesh_path}, computing...")
             mesh.compute_vertex_normals()
-        
+
         return mesh
 
     def process_mesh(
