@@ -6,11 +6,11 @@ This script runs in a separate Python 3.11 environment with bpy installed.
 It receives commands via command line arguments and performs mesh operations.
 
 Usage:
-    python worker.py <input_obj> <output_obj> --auto-smooth <angle> [--uv-method <method>]
+    python worker.py <input_mesh> <output_mesh> --auto-smooth <angle> [--uv-method <method>]
 
 Arguments:
-    input_obj       Path to input OBJ file
-    output_obj      Path to output OBJ file
+    input_mesh      Path to input mesh file (OBJ or GLB)
+    output_mesh     Path to output mesh file (OBJ or GLB)
     --auto-smooth   Auto smooth angle in degrees (default: 30)
     --uv-method     UV unwrap method: smart_project, lightmap_pack, cube_project, or none
 """
@@ -21,19 +21,29 @@ import os
 import math
 
 
-def setup_blender_scene(obj_path: str) -> bool:
-    """Setup Blender scene and import OBJ file."""
+def setup_blender_scene(mesh_path: str) -> bool:
+    """Setup Blender scene and import mesh file (OBJ or GLB)."""
     import bpy
 
     # Clear existing mesh objects
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete(use_global=False)
 
-    # Import OBJ (built-in since Blender 4.0)
+    # Determine import method based on file extension
+    ext = os.path.splitext(mesh_path)[1].lower()
+    
     try:
-        bpy.ops.wm.obj_import(filepath=obj_path)
+        if ext == '.glb' or ext == '.gltf':
+            # Import GLB/glTF
+            bpy.ops.import_scene.gltf(filepath=mesh_path)
+        elif ext == '.obj':
+            # Import OBJ (built-in since Blender 4.0)
+            bpy.ops.wm.obj_import(filepath=mesh_path)
+        else:
+            print(f"ERROR: Unsupported file format: {ext}", file=sys.stderr)
+            return False
     except Exception as e:
-        print(f"ERROR: Failed to import OBJ: {e}", file=sys.stderr)
+        print(f"ERROR: Failed to import mesh: {e}", file=sys.stderr)
         return False
 
     # Get the imported mesh objects
@@ -164,10 +174,39 @@ def export_obj(output_path: str) -> bool:
     return True
 
 
+def export_glb(output_path: str) -> bool:
+    """Export the active mesh to GLB file (binary glTF 2.0)."""
+    import bpy
+
+    obj = bpy.context.active_object
+    if obj is None:
+        print("ERROR: No active object to export", file=sys.stderr)
+        return False
+
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+
+    try:
+        bpy.ops.export_scene.gltf(
+            filepath=output_path,
+            export_format='GLB',
+            use_selection=True,
+            export_materials='EXPORT',
+            export_normals=True,
+            export_cameras=False,
+            export_lights=False
+        )
+    except Exception as e:
+        print(f"ERROR: Failed to export GLB: {e}", file=sys.stderr)
+        return False
+
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description='Blender mesh processor worker')
-    parser.add_argument('input_obj', help='Path to input OBJ file')
-    parser.add_argument('output_obj', help='Path to output OBJ file')
+    parser.add_argument('input_mesh', help='Path to input mesh file (OBJ/GLB)')
+    parser.add_argument('output_mesh', help='Path to output mesh file (OBJ/GLB)')
     parser.add_argument('--auto-smooth', type=float, default=30.0,
                         help='Auto smooth angle in degrees')
     parser.add_argument('--uv-method', default='none',
@@ -178,11 +217,11 @@ def main():
 
     args = parser.parse_args()
 
-    if not os.path.isfile(args.input_obj):
-        print(f"ERROR: Input file not found: {args.input_obj}", file=sys.stderr)
+    if not os.path.isfile(args.input_mesh):
+        print(f"ERROR: Input file not found: {args.input_mesh}", file=sys.stderr)
         sys.exit(1)
 
-    if not setup_blender_scene(args.input_obj):
+    if not setup_blender_scene(args.input_mesh):
         sys.exit(1)
 
     if args.decimate_ratio < 1.0:
@@ -200,10 +239,16 @@ def main():
             print("ERROR: Failed to apply UV unwrapping", file=sys.stderr)
             sys.exit(1)
 
-    if not export_obj(args.output_obj):
-        sys.exit(1)
+    # Determine export format based on output extension
+    output_ext = os.path.splitext(args.output_mesh)[1].lower()
+    if output_ext == '.glb':
+        if not export_glb(args.output_mesh):
+            sys.exit(1)
+    else:
+        if not export_obj(args.output_mesh):
+            sys.exit(1)
 
-    print(f"SUCCESS: Processed mesh saved to {args.output_obj}")
+    print(f"SUCCESS: Processed mesh saved to {args.output_mesh}")
     sys.exit(0)
 
 

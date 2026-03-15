@@ -7,6 +7,68 @@ import base64
 import io
 
 
+def extract_texture_from_mesh(mesh):
+    """
+    从 trimesh 对象中提取纹理
+    
+    Args:
+        mesh: trimesh.Trimesh 对象
+        
+    Returns:
+        dict: 纹理字典 {'albedo': PIL.Image, ...} 或空字典
+    """
+    textures = {}
+    
+    if not hasattr(mesh, 'visual'):
+        return textures
+    
+    visual = mesh.visual
+    
+    # 处理 SimpleMaterial (常用于 OBJ 加载)
+    if hasattr(visual, 'material'):
+        material = visual.material
+        if material is not None:
+            # Base color / Diffuse
+            if hasattr(material, 'baseColorTexture') and material.baseColorTexture is not None:
+                try:
+                    textures['albedo'] = material.baseColorTexture
+                except Exception:
+                    pass
+            elif hasattr(material, 'diffuse') and material.diffuse is not None:
+                # 有些 trimesh 版本使用 diffuse 属性
+                if isinstance(material.diffuse, Image.Image):
+                    textures['albedo'] = material.diffuse
+                    
+            # Metallic/Roughness
+            if hasattr(material, 'metallicRoughnessTexture') and material.metallicRoughnessTexture is not None:
+                try:
+                    textures['metallicRoughness'] = material.metallicRoughnessTexture
+                except Exception:
+                    pass
+                    
+            # Normal map
+            if hasattr(material, 'normalTexture') and material.normalTexture is not None:
+                try:
+                    textures['normal'] = material.normalTexture
+                except Exception:
+                    pass
+                    
+    # 处理 TextureVisuals (常用于带 UV 的 mesh)
+    if hasattr(visual, 'image') and visual.image is not None:
+        if isinstance(visual.image, Image.Image):
+            textures['albedo'] = visual.image
+    
+    # 处理 SimpleVisual 中的颜色贴图
+    if hasattr(visual, 'vertex_attributes'):
+        attrs = visual.vertex_attributes
+        if hasattr(attrs, 'material') and attrs.material is not None:
+            material = attrs.material
+            if hasattr(material, 'baseColorTexture') and material.baseColorTexture is not None:
+                textures['albedo'] = material.baseColorTexture
+    
+    return textures
+
+
 def combine_metallic_roughness(metallic, roughness, output_path=None):
     """
     将metallic和roughness贴图合并为一张贴图
@@ -78,7 +140,10 @@ def create_glb_with_pbr_materials(mesh, textures_dict, output_path):
     vertices = mesh.vertices.astype(np.float32)
     faces = mesh.faces.astype(np.uint32)
     
-    # Get normals (trimesh always computes vertex_normals automatically)
+    # Get normals - ensure they exist
+    if not hasattr(mesh, 'vertex_normals') or mesh.vertex_normals is None or len(mesh.vertex_normals) == 0:
+        print("[convert_utils] Warning: No vertex normals found, computing...")
+        mesh.compute_vertex_normals()
     normals = mesh.vertex_normals.astype(np.float32)
 
     # Get UV coordinates if available

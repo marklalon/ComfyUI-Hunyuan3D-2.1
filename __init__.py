@@ -35,7 +35,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Hunyuan3DTexureSynthsis": "Hunyuan3D Texure Synthsis",
     "Load3DMesh": "Load 3D Mesh (OBJ/GLB/STL...)",
     "ConvertToGLB": "Convert to GLB",
-    "BlenderMeshProcessor": "Blender Mesh Processor (AutoSmooth + UV + Decimate)",
+    "BlenderMeshProcessor": "Blender Mesh Processor (AutoSmooth + Decimate)",
 } 
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']

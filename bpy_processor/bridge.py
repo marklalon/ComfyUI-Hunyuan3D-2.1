@@ -105,6 +105,34 @@ class BpyBridge:
             pass
         return None
 
+    def _load_mesh(self, mesh_path: str) -> trimesh.Trimesh:
+        """
+        Load mesh file (GLB or OBJ) and return as trimesh.
+        
+        GLB format is preferred as it properly preserves:
+        - Vertex normals (including hard edges via vertex splitting)
+        - UV coordinates
+        - Materials
+        
+        Args:
+            mesh_path: Path to the mesh file (GLB or OBJ).
+            
+        Returns:
+            trimesh.Trimesh with normals preserved.
+        """
+        mesh = trimesh.load(mesh_path, force='mesh')
+        
+        # Handle Scene objects
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+        
+        # Ensure vertex normals exist (trimesh should load them from GLB, but verify)
+        if not hasattr(mesh, 'vertex_normals') or mesh.vertex_normals is None or len(mesh.vertex_normals) == 0:
+            print(f"[BpyBridge] Warning: No vertex normals found in {mesh_path}, computing...")
+            mesh.compute_vertex_normals()
+        
+        return mesh
+
     def process_mesh(
         self,
         mesh: trimesh.Trimesh,
@@ -123,8 +151,8 @@ class BpyBridge:
             decimate_ratio: Decimate ratio (0.0-1.0, 1.0 = no decimation).
 
         Returns:
-            Tuple of (processed trimesh, path to the output OBJ file).
-            The caller is responsible for deleting the OBJ file when done.
+            Tuple of (processed trimesh, path to the output GLB file).
+            The caller is responsible for deleting the GLB file when done.
 
         Raises:
             BpyProcessingError: If processing fails.
@@ -143,24 +171,24 @@ class BpyBridge:
         temp_output = None
         
         try:
-            # Create input temp file
+            # Create input temp file (GLB format)
             with tempfile.NamedTemporaryFile(
-                suffix='.obj', 
+                suffix='.glb', 
                 delete=False,
                 prefix='bpy_input_'
             ) as f:
                 temp_input = f.name
             
-            # Create output temp file
+            # Create output temp file (GLB format - preserves normals and UV)
             with tempfile.NamedTemporaryFile(
-                suffix='.obj', 
+                suffix='.glb', 
                 delete=False,
                 prefix='bpy_output_'
             ) as f:
                 temp_output = f.name
             
-            # Export mesh to temp OBJ
-            mesh.export(temp_input)
+            # Export mesh to temp GLB
+            mesh.export(temp_input, file_type='glb')
             
             # Build subprocess command
             cmd = [
@@ -193,11 +221,8 @@ class BpyBridge:
                     "bpy processing failed: output file not created"
                 )
             
-            result_mesh = trimesh.load(temp_output, force='mesh')
-
-            # Handle Scene objects
-            if isinstance(result_mesh, trimesh.Scene):
-                result_mesh = result_mesh.dump(concatenate=True)
+            # GLB format preserves normals and UV correctly
+            result_mesh = self._load_mesh(temp_output)
 
             return result_mesh, temp_output
 

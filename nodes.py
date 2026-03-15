@@ -227,7 +227,25 @@ class Load3DMesh:
             raise ValueError(f"Unsupported format '{ext}'. Supported: {', '.join(self.SUPPORTED_EXTENSIONS)}")
 
         import trimesh
+        
+        # Load mesh - trimesh.load() preserves normals and UV for GLB/OBJ
         mesh = trimesh.load(mesh_path)
+        
+        # Handle Scene objects by concatenating all meshes
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+        
+        # Ensure vertex normals exist
+        # GLB/GLTF: normals are preserved from file
+        # OBJ: normals may or may not be in file, trimesh handles this
+        # STL/PLY/OFF: usually no normals, need to compute
+        if not hasattr(mesh, 'vertex_normals') or mesh.vertex_normals is None or len(mesh.vertex_normals) == 0:
+            send_progress(f"[Load3DMesh] No vertex normals found, computing...", print_to_console=True)
+            mesh.compute_vertex_normals()
+        
+        # Log UV status
+        has_uv = hasattr(mesh, 'visual') and hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None and len(mesh.visual.uv) > 0
+        send_progress(f"[Load3DMesh] Loaded: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces, UV: {has_uv}", print_to_console=True)
 
         return (mesh_path, mesh)
 
@@ -254,7 +272,7 @@ class ConvertToGLB:
     OUTPUT_NODE = True
 
     def convert(self, mesh, filename_prefix, albedo_texture=None, metallic_texture=None, roughness_texture=None):
-        from hy3dpaint.convert_utils import create_glb_with_pbr_materials
+        from hy3dpaint.convert_utils import create_glb_with_pbr_materials, extract_texture_from_mesh
         
         # 获取输出目录（counter 基于图片文件，不可直接用于 GLB）
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
@@ -283,6 +301,13 @@ class ConvertToGLB:
             roughness_np = np.clip(roughness_texture[0].cpu().numpy() * 255, 0, 255).astype(np.uint8)
             textures_dict['roughness'] = Image.fromarray(roughness_np)
         
+        # 如果没有显式指定纹理，尝试从 mesh 中提取
+        if not textures_dict:
+            extracted = extract_texture_from_mesh(mesh)
+            if extracted:
+                send_progress(f"[ConvertToGLB] Extracted textures from mesh: {list(extracted.keys())}", print_to_console=True)
+                textures_dict = extracted
+        
         # 调用 create_glb_with_pbr_materials
         create_glb_with_pbr_materials(mesh, textures_dict, glb_path)
 
@@ -291,11 +316,10 @@ class ConvertToGLB:
 
 class BlenderMeshProcessor:
     """
-    Blender 网格处理器 - 使用独立 bpy 环境进行 AutoSmooth、UV 展开和 Decimate 减面
+    Blender 网格处理器 - 使用独立 bpy 环境进行 AutoSmooth 和 Decimate 减面
 
     该节点通过子进程调用独立 Python 3.11 + bpy 环境，提供 Blender 独有的网格处理功能：
     - AutoSmooth: 基于角度阈值的自动平滑着色
-    - UV 展开: Smart Project / Lightmap Pack / Cube Project
     - Decimate: 基于 Collapse 算法的减面
 
     使用前需要先创建 bpy 环境，详见 SETUP_BPY.md
@@ -313,10 +337,6 @@ class BlenderMeshProcessor:
                     "step": 1.0,
                     "display": "number"
                 }),
-                "enable_uv_unwrap": ("BOOLEAN", {"default": False}),
-                "uv_method": (["smart_project", "lightmap_pack", "cube_project"], {
-                    "default": "smart_project"
-                }),
                 "decimate_ratio": ("FLOAT", {
                     "default": 0.5,
                     "min": 0.01,
@@ -332,7 +352,7 @@ class BlenderMeshProcessor:
     FUNCTION = "process"
     CATEGORY = "Hunyuan3D-2.1"
 
-    def process(self, mesh, auto_smooth_angle, enable_uv_unwrap, uv_method, decimate_ratio):
+    def process(self, mesh, auto_smooth_angle, decimate_ratio):
         from bpy_processor import BpyBridge, BpyProcessingError
         import trimesh
 
@@ -342,28 +362,29 @@ class BlenderMeshProcessor:
         if isinstance(mesh, trimesh.Scene):
             mesh = mesh.dump(concatenate=True)
 
+        # 确保 mesh 有 vertex normals，没有则自动计算
+        if not mesh.vertex_normals.any():
+            mesh.compute_vertex_normals()
+
         bridge = BpyBridge()
 
         send_progress(f"Using bpy version: {'.'.join(map(str, bridge.get_bpy_version() or (0, 0, 0)))}", 10, print_to_console=True)
         
-        # 确定 UV 方法
-        actual_uv_method = uv_method if enable_uv_unwrap else 'none'
-
-        send_progress(f"Processing: AutoSmooth={auto_smooth_angle}°, UV={actual_uv_method}, Decimate={decimate_ratio}", 20, print_to_console=True)
+        send_progress(f"Processing: AutoSmooth={auto_smooth_angle}°, Decimate={decimate_ratio}", 20, print_to_console=True)
 
         try:
             # 调用 bpy 处理
             result_mesh, temp_obj_path = bridge.process_mesh(
                 mesh=mesh,
                 auto_smooth_angle=auto_smooth_angle,
-                uv_method=actual_uv_method,
+                uv_method='none',
                 decimate_ratio=decimate_ratio
             )
 
             send_progress(f"Blender processing complete. Vertices: {len(result_mesh.vertices)}, Faces: {len(result_mesh.faces)}", 100, print_to_console=True)
 
             processed_path = os.path.join(
-                folder_paths.get_output_directory(), "hunyuan3d_temp", "blender_processed.obj"
+                folder_paths.get_output_directory(), "hunyuan3d_temp", "blender_processed.glb"
             )
             os.makedirs(os.path.dirname(processed_path), exist_ok=True)
             shutil.copy2(temp_obj_path, processed_path)
