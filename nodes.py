@@ -219,6 +219,8 @@ class Load3DMesh:
     OUTPUT_NODE = True
 
     def load_mesh(self, mesh_path):
+        import trimesh
+
         if not os.path.isfile(mesh_path):
             raise FileNotFoundError(f"Mesh file not found: {mesh_path}")
 
@@ -361,6 +363,20 @@ class BlenderMeshProcessor:
         # 确保 mesh 有 vertex normals，没有则自动计算
         if not mesh.vertex_normals.any():
             mesh.compute_vertex_normals()
+
+        # 有 UV 且进行减面时给出提示：先减面再贴图效果更好
+        has_uv = (
+            hasattr(mesh, 'visual')
+            and hasattr(mesh.visual, 'uv')
+            and mesh.visual.uv is not None
+            and len(mesh.visual.uv) > 0
+        )
+        if has_uv and decimate_ratio < 1.0:
+            send_progress(
+                "[BlenderMeshProcessor][Warning] 检测到模型包含 UV/贴图信息，当前 decimate_ratio < 1 会降低贴图质量。"
+                "不建议对有贴图的模型减面，建议先减面再贴图，效果更好。",
+                print_to_console=True,
+            )
 
         bridge = BpyBridge()
 
