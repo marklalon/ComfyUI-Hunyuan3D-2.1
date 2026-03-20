@@ -62,7 +62,7 @@ class LoadHunyuan3DModel:
     def load_model(self, model_path, device="cuda"):
         from hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
         model = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(model_path)
-        
+        model.to(device)
         return (model,)
 
 
@@ -134,6 +134,9 @@ class Hunyuan3DShapeGeneration:
 
 
 class Hunyuan3DTexureSynthsis:
+    _pipeline_cache = None
+    _pipeline_cache_key = None
+
     @classmethod
     def INPUT_TYPES(s):
         return {
@@ -154,9 +157,15 @@ class Hunyuan3DTexureSynthsis:
         import trimesh
         from hy3dpaint.textureGenPipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintConfig
 
-        send_progress("Initializing texture synthesis pipeline...", 5)
-        paint_pipeline = Hunyuan3DPaintPipeline(Hunyuan3DPaintConfig(texture_size=texture_size, resolution=resolution))
-        
+        cache_key = (texture_size, resolution)
+        if Hunyuan3DTexureSynthsis._pipeline_cache is None or Hunyuan3DTexureSynthsis._pipeline_cache_key != cache_key:
+            send_progress("Initializing texture synthesis pipeline...", 5)
+            Hunyuan3DTexureSynthsis._pipeline_cache = Hunyuan3DPaintPipeline(
+                Hunyuan3DPaintConfig(texture_size=texture_size, resolution=resolution)
+            )
+            Hunyuan3DTexureSynthsis._pipeline_cache_key = cache_key
+        paint_pipeline = Hunyuan3DTexureSynthsis._pipeline_cache
+
         send_progress("Preparing image input...", 10)
         pil_image = tensor_to_pil(image)
         

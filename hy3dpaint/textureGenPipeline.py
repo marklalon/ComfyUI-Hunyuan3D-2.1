@@ -177,8 +177,8 @@ class Hunyuan3DPaintPipeline:
         ###########  Enhance  ##########
         report_progress("enhance", 0, "Enhancing texture quality...")
         enhance_images = {}
-        enhance_images["albedo"] = copy.deepcopy(multiviews_pbr["albedo"])
-        enhance_images["mr"] = copy.deepcopy(multiviews_pbr["mr"])
+        enhance_images["albedo"] = list(multiviews_pbr["albedo"])
+        enhance_images["mr"] = list(multiviews_pbr["mr"])
 
         total_enhance = len(enhance_images["albedo"]) * 2
         enhance_idx = 0
